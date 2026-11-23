@@ -1,0 +1,32 @@
+{
+  "name": "erp-apps",
+  "version": "1.0.0",
+  "description": "Plataforma multi-empresa de aplicaciones dinámicas (credenciales, correo, fibras, líneas, vehículos, recados)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "dev": "node --no-warnings --watch server/index.js",
+    "test": "node --no-warnings --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itadminreto/erp.git"
+  },
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/itadminreto/erp/issues"
+  },
+  "homepage": "https://github.com/itadminreto/erp#readme",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
+    "express": "^4.22.3",
+    "multer": "^2.5.0",
+    "nodemailer": "^10.6.1",
+    "sortablejs": "^1.15.7"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  }
+}

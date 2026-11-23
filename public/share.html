@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Contraseña compartida</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="center-page">
+  <div class="card share-card">
+    <h1>🔐 Contraseña compartida</h1>
+    <p class="muted" id="intro">Este enlace solo puede abrirse un número limitado de veces. Pulsa el botón cuando estés preparado para verla.</p>
+    <button class="btn primary block" id="show">Mostrar contraseña</button>
+    <div id="out" hidden>
+      <div class="muted" id="meta"></div>
+      <div class="secret" id="secret"></div>
+      <button class="btn block" id="copy">Copiar</button>
+      <p class="muted small" id="rem"></p>
+    </div>
+    <p class="error" id="err" hidden></p>
+  </div>
+  <script>
+    const code = location.pathname.split('/').pop();
+    document.getElementById('show').onclick = async () => {
+      const r = await fetch('/api/share/' + encodeURIComponent(code), { method: 'POST', headers: { 'X-Requested-With': 'erp' } });
+      const j = await r.json();
+      document.getElementById('show').hidden = true;
+      document.getElementById('intro').hidden = true;
+      if (!r.ok) { const e = document.getElementById('err'); e.textContent = j.error; e.hidden = false; return; }
+      document.getElementById('meta').textContent = `${j.app} · ${j.title} · ${j.label}`;
+      document.getElementById('secret').textContent = j.value;
+      document.getElementById('rem').textContent = j.remaining > 0 ? `Quedan ${j.remaining} visualizaciones.` : 'El enlace ya no podrá volver a abrirse.';
+      document.getElementById('out').hidden = false;
+      document.getElementById('copy').onclick = () => navigator.clipboard.writeText(j.value);
+    };
+  </script>
+</body>
+</html>
