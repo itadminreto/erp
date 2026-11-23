@@ -1,6 +1,6 @@
 'use strict';
 // Tipos de campo dinámicos, validación y conversión desde/hacia texto (importación/exportación).
-const { all, get } = require('./db');
+const { all } = require('./db');
 
 const FIELD_TYPES = {
   text: 'Texto', textarea: 'Texto largo', number: 'Número entero', decimal: 'Número decimal',
@@ -14,8 +14,8 @@ function parseField(f) {
   try { options = f.options ? JSON.parse(f.options) : {}; } catch { options = {}; }
   return { ...f, options, required: !!f.required, unique_value: !!f.unique_value, show_in_list: !!f.show_in_list, active: !!f.active };
 }
-function appFields(appId, includeInactive = false) {
-  return all(`SELECT * FROM fields WHERE app_id = ? ${includeInactive ? '' : 'AND active = 1'} ORDER BY sort, id`, appId).map(parseField);
+async function appFields(appId, includeInactive = false) {
+  return (await all(`SELECT * FROM fields WHERE app_id = ? ${includeInactive ? '' : 'AND active = 1'} ORDER BY sort, id`, appId)).map(parseField);
 }
 
 const YES = ['1', 'si', 'sí', 's', 'yes', 'y', 'true', 'x', 'verdadero'];
@@ -36,7 +36,7 @@ function toDateStr(v) {
 
 /**
  * Normaliza un valor según el tipo de campo. Lanza Error con mensaje legible si no es válido.
- * `ctx.users` (opcional) permite resolver usuarios por nombre/email en importaciones.
+ * `ctx.users` = lista de usuarios ({id, name, email}) para validar campos de tipo usuario.
  */
 function normalize(field, raw, ctx = {}) {
   if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
@@ -90,12 +90,12 @@ function normalize(field, raw, ctx = {}) {
       });
     }
     case 'user': {
+      const list = ctx.users || [];
       if (typeof raw === 'number' || /^\d+$/.test(String(raw))) {
-        const u = get('SELECT id FROM users WHERE id = ?', Number(raw));
+        const u = list.find((x) => x.id === Number(raw));
         if (u) return u.id;
       }
       const s = String(raw).trim().toLowerCase();
-      const list = ctx.users || all('SELECT id, name, email FROM users WHERE deleted_at IS NULL');
       const u = list.find((x) => x.email.toLowerCase() === s || x.name.toLowerCase() === s);
       if (!u) throw new Error(`${L}: usuario "${raw}" no encontrado`);
       return u.id;

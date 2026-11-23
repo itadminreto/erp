@@ -2,13 +2,13 @@
 const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
-const { all, get, run, tx } = require('../db');
+const { all, get, run, tx, sqlDate } = require('../db');
 const { grantsFor, can, summary, sqlFilter } = require('../auth');
 const { appFields, normalize, toText } = require('../fields');
 const { encrypt, decrypt, shortCode } = require('../crypto');
 const { audit, diff } = require('../audit');
 const { parseCSV, toCSV } = require('../csv');
-const { sendMail, getSetting, publicUrl } = require('../mailer');
+const { sendMail, publicUrl } = require('../mailer');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -18,31 +18,35 @@ const KEY_RE = /^[a-z][a-z0-9_]*$/;
 // ---------- utilidades ----------
 const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 
-function activeUsers() {
-  return all('SELECT id, name, email, phone FROM users WHERE deleted_at IS NULL ORDER BY name');
-}
-function companyCenters(companyId) {
-  return all('SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL AND active = 1 ORDER BY code, name', companyId);
+/** Expresión SQL que extrae el valor escalar de un campo del JSON `data` (clave validada). */
+function jv(key, alias = 'r') {
+  if (!KEY_RE.test(key)) throw httpError(400, 'Clave de campo no válida');
+  return `JSON_VALUE(${alias ? alias + '.' : ''}data, '$.${key}')`;
 }
 
+const activeUsers = () => all('SELECT id, name, email, phone FROM users WHERE deleted_at IS NULL ORDER BY name');
+const companyCenters = (companyId) => all('SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL AND active = 1 ORDER BY code, name', companyId);
+
 /** Carga la app, sus campos y los permisos del usuario en la empresa activa. */
-router.param('appKey', (req, res, next, key) => {
-  const app = get('SELECT * FROM apps WHERE key = ? AND active = 1', key);
-  if (!app) return res.status(404).json({ error: 'Aplicación no encontrada' });
-  if (!req.companyId) return res.status(403).json({ error: 'No tienes ninguna empresa asignada' });
-  req.appDef = app;
-  req.fields = appFields(app.id);
-  req.grants = grantsFor(req.user, req.companyId, app.id);
-  if (!req.grants.view.length) return res.status(403).json({ error: 'Sin acceso a esta aplicación' });
+router.param('appKey', async (req, res, next, key) => {
+  try {
+    const app = await get('SELECT * FROM apps WHERE `key` = ? AND active = 1', key);
+    if (!app) return res.status(404).json({ error: 'Aplicación no encontrada' });
+    if (!req.companyId) return res.status(403).json({ error: 'No tienes ninguna empresa asignada' });
+    req.appDef = app;
+    req.fields = await appFields(app.id);
+    req.grants = await grantsFor(req.user, req.companyId, app.id);
+    if (!req.grants.view.length) return res.status(403).json({ error: 'Sin acceso a esta aplicación' });
+  } catch (e) { return next(e); }
   next();
 });
 
-function getRecord(req, id) {
-  const r = get(
-    `SELECT r.*, c.name center_name, c.code center_code, uc.name created_by_name, uu.name updated_by_name, ud.name deleted_by_name
-     FROM records r LEFT JOIN centers c ON c.id = r.center_id
-     LEFT JOIN users uc ON uc.id = r.created_by LEFT JOIN users uu ON uu.id = r.updated_by LEFT JOIN users ud ON ud.id = r.deleted_by
-     WHERE r.id = ? AND r.app_id = ? AND r.company_id = ?`, Number(id), req.appDef.id, req.companyId);
+const SELECT_REC = `SELECT r.*, c.name center_name, c.code center_code, uc.name created_by_name, uu.name updated_by_name, ud.name deleted_by_name
+  FROM records r LEFT JOIN centers c ON c.id = r.center_id
+  LEFT JOIN users uc ON uc.id = r.created_by LEFT JOIN users uu ON uu.id = r.updated_by LEFT JOIN users ud ON ud.id = r.deleted_by`;
+
+async function getRecord(req, id) {
+  const r = await get(`${SELECT_REC} WHERE r.id = ? AND r.app_id = ? AND r.company_id = ?`, Number(id), req.appDef.id, req.companyId);
   if (!r) throw httpError(404, 'Registro no encontrado');
   const perm = r.deleted_at ? 'view_trash' : 'view';
   if (!can(req.grants, perm, req.user, r)) throw httpError(403, 'Sin permiso sobre este registro');
@@ -74,13 +78,13 @@ function serialize(req, r) {
   };
 }
 
-/** Valida y normaliza el payload de un registro. `existing` = datos actuales (descifrados no). */
-function buildData(req, input, existing = {}, ctx = {}) {
-  const data = { ...existing };
+/** Valida y normaliza el payload de un registro. `existing` = datos actuales (cifrados). */
+function buildData(req, input, existing, ctx) {
+  const data = { ...(existing || {}) };
   const errors = [];
   for (const f of req.fields) {
     if (!(f.key in input)) continue;
-    let v = input[f.key];
+    const v = input[f.key];
     if (f.type === 'password') {
       if (v === MASK) continue; // sin cambios
       data[f.key] = v ? encrypt(String(v)) : '';
@@ -96,20 +100,20 @@ function buildData(req, input, existing = {}, ctx = {}) {
   return data;
 }
 
-function checkUnique(req, data, exceptId = 0) {
+async function checkUnique(req, data, exceptId = 0) {
   for (const f of req.fields.filter((x) => x.unique_value && x.type !== 'password')) {
     const v = data[f.key];
     if (v === '' || v === undefined || v === null) continue;
-    const dup = get(
-      `SELECT id FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND id != ?
-       AND lower(CAST(json_extract(data, ?) AS TEXT)) = lower(?)`,
-      req.appDef.id, req.companyId, exceptId, `$.${f.key}`, String(v));
+    const dup = await get(
+      `SELECT id FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND id <> ?
+       AND LOWER(${jv(f.key, '')}) = LOWER(?) LIMIT 1`,
+      req.appDef.id, req.companyId, exceptId, String(v));
     if (dup) throw httpError(409, `${f.label}: ya existe un registro con "${v}" (#${dup.id})`);
   }
 }
 
-function checkCenter(req, centerId, perm) {
-  if (centerId !== null && !get('SELECT id FROM centers WHERE id = ? AND company_id = ? AND deleted_at IS NULL', centerId, req.companyId)) {
+async function checkCenter(req, centerId, perm) {
+  if (centerId !== null && !(await get('SELECT id FROM centers WHERE id = ? AND company_id = ? AND deleted_at IS NULL', centerId, req.companyId))) {
     throw httpError(400, 'Centro no válido para la empresa activa');
   }
   if (!can(req.grants, perm, req.user, { center_id: centerId })) {
@@ -117,53 +121,54 @@ function checkCenter(req, centerId, perm) {
   }
 }
 
-const wrap = (fn) => (req, res) => {
-  try { const r = fn(req, res); if (r && r.then) r.catch((e) => fail(res, e)); }
-  catch (e) { fail(res, e); }
+const wrap = (fn) => async (req, res) => {
+  try { await fn(req, res); } catch (e) { fail(res, e); }
 };
 function fail(res, e) {
   if (!e.status) console.error(e);
+  if (res.headersSent) return res.end();
   res.status(e.status || 500).json({ error: e.status ? e.message : 'Error interno: ' + e.message });
 }
+const pwKeysOf = (req) => req.fields.filter((f) => f.type === 'password').map((f) => f.key);
 
 // ---------- catálogo de apps ----------
-router.get('/', wrap((req, res) => {
+router.get('/', wrap(async (req, res) => {
   if (!req.companyId) return res.json([]);
-  const apps = all('SELECT * FROM apps WHERE active = 1 ORDER BY sort, name');
+  const apps = await all('SELECT * FROM apps WHERE active = 1 ORDER BY sort, name');
   const out = [];
   for (const a of apps) {
-    const g = grantsFor(req.user, req.companyId, a.id);
+    const g = await grantsFor(req.user, req.companyId, a.id);
     if (!g.view.length) continue;
     const f = sqlFilter(g, 'view', req.user);
-    const n = get(`SELECT COUNT(*) n FROM records r WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND ${f.sql}`, a.id, req.companyId, ...f.params).n;
+    const n = (await get(`SELECT COUNT(*) n FROM records r WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND ${f.sql}`, a.id, req.companyId, ...f.params)).n;
     out.push({ ...a, count: n, perms: summary(g) });
   }
   res.json(out);
 }));
 
-router.get('/:appKey', wrap((req, res) => {
+router.get('/:appKey', wrap(async (req, res) => {
   const layouts = {};
-  for (const l of all('SELECT kind, config FROM user_layouts WHERE user_id = ? AND app_id = ?', req.user.id, req.appDef.id)) {
+  for (const l of await all('SELECT kind, config FROM user_layouts WHERE user_id = ? AND app_id = ?', req.user.id, req.appDef.id)) {
     layouts[l.kind] = JSON.parse(l.config);
   }
-  const centers = companyCenters(req.companyId).map((c) => ({
+  const centers = (await companyCenters(req.companyId)).map((c) => ({
     ...c, can_create: can(req.grants, 'create', req.user, { center_id: c.id }),
   }));
   res.json({
     app: req.appDef, fields: req.fields, perms: summary(req.grants),
     can_create_without_center: can(req.grants, 'create', req.user, { center_id: null }),
-    centers, users: activeUsers(), layouts,
+    centers, users: await activeUsers(), layouts,
   });
 }));
 
-router.put('/:appKey/layout/:kind', wrap((req, res) => {
+router.put('/:appKey/layout/:kind', wrap(async (req, res) => {
   const kind = req.params.kind;
   if (!['list', 'form'].includes(kind)) throw httpError(400, 'Tipo de diseño no válido');
   if (req.body && req.body.reset) {
-    run('DELETE FROM user_layouts WHERE user_id = ? AND app_id = ? AND kind = ?', req.user.id, req.appDef.id, kind);
+    await run('DELETE FROM user_layouts WHERE user_id = ? AND app_id = ? AND kind = ?', req.user.id, req.appDef.id, kind);
   } else {
-    run(`INSERT INTO user_layouts (user_id, app_id, kind, config) VALUES (?,?,?,?)
-         ON CONFLICT(user_id, app_id, kind) DO UPDATE SET config = excluded.config`,
+    await run(`INSERT INTO user_layouts (user_id, app_id, kind, config) VALUES (?,?,?,?)
+         ON DUPLICATE KEY UPDATE config = VALUES(config)`,
       req.user.id, req.appDef.id, kind, JSON.stringify(req.body || {}));
   }
   res.json({ ok: true });
@@ -189,7 +194,7 @@ function listQuery(req, q) {
   if (q.q) {
     const terms = String(q.q).trim().split(/\s+/).slice(0, 5);
     for (const t of terms) {
-      where.push(`(r.data LIKE ? OR c.name LIKE ? OR c.code LIKE ? OR CAST(r.id AS TEXT) = ?)`);
+      where.push(`(r.data LIKE ? OR c.name LIKE ? OR c.code LIKE ? OR CAST(r.id AS CHAR) = ?)`);
       params.push(`%${t}%`, `%${t}%`, `%${t}%`, t);
     }
   }
@@ -199,123 +204,127 @@ function listQuery(req, q) {
     const key = k.slice(2);
     const f = req.fields.find((x) => x.key === key);
     if (!f || f.type === 'password') continue;
-    if (['select', 'user', 'checkbox'].includes(f.type)) {
-      where.push(`CAST(json_extract(r.data, ?) AS TEXT) = ?`);
-      params.push(`$.${key}`, f.type === 'checkbox' ? (v === '1' || v === 'true' ? '1' : '0') : String(v));
+    if (f.type === 'checkbox') {
+      where.push(`${jv(key)} = ?`); params.push(v === '1' || v === 'true' ? 'true' : 'false');
+    } else if (['select', 'user'].includes(f.type)) {
+      where.push(`${jv(key)} = ?`); params.push(String(v));
     } else {
-      where.push(`CAST(json_extract(r.data, ?) AS TEXT) LIKE ?`);
-      params.push(`$.${key}`, `%${v}%`);
+      where.push(`${jv(key)} LIKE ?`); params.push(`%${v}%`);
     }
   }
   let order = 'r.updated_at DESC';
   const dir = q.dir === 'asc' ? 'ASC' : 'DESC';
   if (q.sort) {
+    const f = req.fields.find((x) => x.key === q.sort && x.type !== 'password');
     if (['id', 'created_at', 'updated_at', 'deleted_at'].includes(q.sort)) order = `r.${q.sort} ${dir}`;
     else if (q.sort === 'center') order = `c.code ${dir}, c.name ${dir}`;
-    else if (KEY_RE.test(q.sort) && req.fields.some((f) => f.key === q.sort && f.type !== 'password')) {
-      order = `json_extract(r.data, '$.${q.sort}') COLLATE NOCASE ${dir}`;
-    }
+    else if (f) order = ['number', 'decimal'].includes(f.type) ? `CAST(${jv(f.key)} AS DECIMAL(20,6)) ${dir}` : `${jv(f.key)} ${dir}`;
   }
   return { where: where.join(' AND '), params, order };
 }
 
-const SELECT_REC = `SELECT r.*, c.name center_name, c.code center_code, uc.name created_by_name, uu.name updated_by_name, ud.name deleted_by_name
-  FROM records r LEFT JOIN centers c ON c.id = r.center_id
-  LEFT JOIN users uc ON uc.id = r.created_by LEFT JOIN users uu ON uu.id = r.updated_by LEFT JOIN users ud ON ud.id = r.deleted_by`;
-
-router.get('/:appKey/records', wrap((req, res) => {
+router.get('/:appKey/records', wrap(async (req, res) => {
   const { where, params, order } = listQuery(req, req.query);
   const size = Math.min(Math.max(Number(req.query.size) || 50, 1), 500);
   const page = Math.max(Number(req.query.page) || 1, 1);
-  const total = get(`SELECT COUNT(*) n FROM records r LEFT JOIN centers c ON c.id = r.center_id WHERE ${where}`, ...params).n;
-  const rows = all(`${SELECT_REC} WHERE ${where} ORDER BY ${order}, r.id DESC LIMIT ? OFFSET ?`, ...params, size, (page - 1) * size);
+  const total = (await get(`SELECT COUNT(*) n FROM records r LEFT JOIN centers c ON c.id = r.center_id WHERE ${where}`, ...params)).n;
+  const rows = await all(`${SELECT_REC} WHERE ${where} ORDER BY ${order}, r.id DESC LIMIT ? OFFSET ?`, ...params, size, (page - 1) * size);
   res.json({ total, page, size, rows: rows.map((r) => serialize(req, r)) });
 }));
 
-router.get('/:appKey/records/:id', wrap((req, res) => res.json(serialize(req, getRecord(req, req.params.id)))));
+router.get('/:appKey/records/:id', wrap(async (req, res) => res.json(serialize(req, await getRecord(req, req.params.id)))));
 
 // ---------- alta / modificación ----------
-router.post('/:appKey/records', wrap((req, res) => {
+async function insertRecord(req, centerId, data, summaryText) {
+  const id = Number((await run(`INSERT INTO records (app_id, company_id, center_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
+    req.appDef.id, req.companyId, centerId, JSON.stringify(data), req.user.id, req.user.id)).lastInsertRowid);
+  await audit(req, { entity: 'record', entityId: id, action: 'create', appId: req.appDef.id, companyId: req.companyId,
+    summary: summaryText, changes: diff({}, { ...data, _centro: centerId }, pwKeysOf(req)) });
+  return id;
+}
+async function updateRecord(req, rec, centerId, data, summaryText) {
+  const changes = diff({ ...JSON.parse(rec.data), _centro: rec.center_id }, { ...data, _centro: centerId }, pwKeysOf(req));
+  if (!changes.length) return false;
+  await run(`UPDATE records SET data = ?, center_id = ?, updated_by = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+    JSON.stringify(data), centerId, req.user.id, rec.id);
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'update', appId: req.appDef.id, companyId: req.companyId,
+    summary: summaryText || `Modificación (${changes.length} campo/s)`, changes });
+  return true;
+}
+
+router.post('/:appKey/records', wrap(async (req, res) => {
   const body = req.body || {};
   const centerId = body.center_id ? Number(body.center_id) : null;
-  checkCenter(req, centerId, 'create');
-  const data = buildData(req, body.data || {});
-  checkUnique(req, data);
-  const id = Number(run(`INSERT INTO records (app_id, company_id, center_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
-    req.appDef.id, req.companyId, centerId, JSON.stringify(data), req.user.id, req.user.id).lastInsertRowid);
-  const pwKeys = req.fields.filter((f) => f.type === 'password').map((f) => f.key);
-  audit(req, { entity: 'record', entityId: id, action: 'create', appId: req.appDef.id, companyId: req.companyId,
-    summary: `Alta en ${req.appDef.name}`, changes: diff({}, { ...data, _centro: centerId }, pwKeys) });
-  res.status(201).json(serialize(req, getRecord(req, id)));
+  await checkCenter(req, centerId, 'create');
+  const data = buildData(req, body.data || {}, {}, { users: await activeUsers() });
+  const id = await tx(async () => {
+    await checkUnique(req, data);
+    return insertRecord(req, centerId, data, `Alta en ${req.appDef.name}`);
+  });
+  res.status(201).json(serialize(req, await getRecord(req, id)));
 }));
 
-router.put('/:appKey/records/:id', wrap((req, res) => {
-  const rec = getRecord(req, req.params.id);
+router.put('/:appKey/records/:id', wrap(async (req, res) => {
+  const rec = await getRecord(req, req.params.id);
   if (rec.deleted_at) throw httpError(400, 'El registro está en la papelera: restáuralo primero');
   if (!can(req.grants, 'edit', req.user, rec)) throw httpError(403, 'Sin permiso de edición');
   const body = req.body || {};
-  const before = JSON.parse(rec.data);
   let centerId = rec.center_id;
   if ('center_id' in body) {
     centerId = body.center_id ? Number(body.center_id) : null;
-    if (centerId !== rec.center_id) checkCenter(req, centerId, 'edit');
+    if (centerId !== rec.center_id) await checkCenter(req, centerId, 'edit');
   }
-  const data = buildData(req, body.data || {}, before);
-  checkUnique(req, data, rec.id);
-  const pwKeys = req.fields.filter((f) => f.type === 'password').map((f) => f.key);
-  const changes = diff({ ...before, _centro: rec.center_id }, { ...data, _centro: centerId }, pwKeys);
-  if (!changes.length) return res.json(serialize(req, rec));
-  run(`UPDATE records SET data = ?, center_id = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?`,
-    JSON.stringify(data), centerId, req.user.id, rec.id);
-  audit(req, { entity: 'record', entityId: rec.id, action: 'update', appId: req.appDef.id, companyId: req.companyId,
-    summary: `Modificación (${changes.length} campo/s)`, changes });
-  res.json(serialize(req, getRecord(req, rec.id)));
+  const data = buildData(req, body.data || {}, JSON.parse(rec.data), { users: await activeUsers() });
+  await tx(async () => {
+    await checkUnique(req, data, rec.id);
+    await updateRecord(req, rec, centerId, data);
+  });
+  res.json(serialize(req, await getRecord(req, rec.id)));
 }));
 
 // ---------- papelera ----------
-function softDelete(req, rec) {
+async function softDelete(req, rec) {
   if (rec.deleted_at) return;
   if (!can(req.grants, 'delete', req.user, rec)) throw httpError(403, 'Sin permiso para borrar');
-  run(`UPDATE records SET deleted_at = datetime('now'), deleted_by = ? WHERE id = ?`, req.user.id, rec.id);
-  audit(req, { entity: 'record', entityId: rec.id, action: 'delete', appId: req.appDef.id, companyId: req.companyId, summary: 'Enviado a la papelera' });
+  await run(`UPDATE records SET deleted_at = UTC_TIMESTAMP(), deleted_by = ? WHERE id = ?`, req.user.id, rec.id);
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'delete', appId: req.appDef.id, companyId: req.companyId, summary: 'Enviado a la papelera' });
 }
-function restore(req, rec) {
+async function restore(req, rec) {
   if (!rec.deleted_at) return;
   if (!can(req.grants, 'restore', req.user, rec)) throw httpError(403, 'Sin permiso para restaurar');
-  checkUnique(req, JSON.parse(rec.data), rec.id);
-  run(`UPDATE records SET deleted_at = NULL, deleted_by = NULL, updated_at = datetime('now'), updated_by = ? WHERE id = ?`, req.user.id, rec.id);
-  audit(req, { entity: 'record', entityId: rec.id, action: 'restore', appId: req.appDef.id, companyId: req.companyId, summary: 'Restaurado desde la papelera' });
+  await checkUnique(req, JSON.parse(rec.data), rec.id);
+  await run(`UPDATE records SET deleted_at = NULL, deleted_by = NULL, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?`, req.user.id, rec.id);
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'restore', appId: req.appDef.id, companyId: req.companyId, summary: 'Restaurado desde la papelera' });
 }
-function purge(req, rec) {
+async function purge(req, rec) {
   if (!rec.deleted_at) throw httpError(400, 'Solo se pueden eliminar definitivamente registros de la papelera');
   if (!can(req.grants, 'purge', req.user, rec)) throw httpError(403, 'Sin permiso para eliminar definitivamente');
-  const pwKeys = req.fields.filter((f) => f.type === 'password').map((f) => f.key);
-  audit(req, { entity: 'record', entityId: rec.id, action: 'purge', appId: req.appDef.id, companyId: req.companyId,
-    summary: 'Eliminado definitivamente', changes: diff(JSON.parse(rec.data), {}, pwKeys) });
-  run('DELETE FROM share_links WHERE record_id = ?', rec.id);
-  run('DELETE FROM records WHERE id = ?', rec.id);
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'purge', appId: req.appDef.id, companyId: req.companyId,
+    summary: 'Eliminado definitivamente', changes: diff(JSON.parse(rec.data), {}, pwKeysOf(req)) });
+  await run('DELETE FROM share_links WHERE record_id = ?', rec.id);
+  await run('DELETE FROM records WHERE id = ?', rec.id);
 }
 
-router.delete('/:appKey/records/:id', wrap((req, res) => { softDelete(req, getRecord(req, req.params.id)); res.json({ ok: true }); }));
-router.post('/:appKey/records/:id/restore', wrap((req, res) => { restore(req, getRecord(req, req.params.id)); res.json({ ok: true }); }));
-router.delete('/:appKey/records/:id/purge', wrap((req, res) => { purge(req, getRecord(req, req.params.id)); res.json({ ok: true }); }));
+router.delete('/:appKey/records/:id', wrap(async (req, res) => { const r = await getRecord(req, req.params.id); await tx(() => softDelete(req, r)); res.json({ ok: true }); }));
+router.post('/:appKey/records/:id/restore', wrap(async (req, res) => { const r = await getRecord(req, req.params.id); await tx(() => restore(req, r)); res.json({ ok: true }); }));
+router.delete('/:appKey/records/:id/purge', wrap(async (req, res) => { const r = await getRecord(req, req.params.id); await tx(() => purge(req, r)); res.json({ ok: true }); }));
 
-router.post('/:appKey/bulk', wrap((req, res) => {
+router.post('/:appKey/bulk', wrap(async (req, res) => {
   const { action, ids = [] } = req.body || {};
   const fn = { delete: softDelete, restore, purge }[action];
   if (!fn) throw httpError(400, 'Acción no válida');
   let ok = 0; const errors = [];
   for (const id of ids.slice(0, 1000)) {
-    try { tx(() => fn(req, getRecord(req, id))); ok++; } catch (e) { errors.push(`#${id}: ${e.message}`); }
+    try { const r = await getRecord(req, id); await tx(() => fn(req, r)); ok++; } catch (e) { errors.push(`#${id}: ${e.message}`); }
   }
   res.json({ ok, errors });
 }));
 
 // ---------- historial ----------
-router.get('/:appKey/records/:id/history', wrap((req, res) => {
-  const rec = getRecord(req, req.params.id);
+router.get('/:appKey/records/:id/history', wrap(async (req, res) => {
+  const rec = await getRecord(req, req.params.id);
   if (!can(req.grants, 'view_history', req.user, rec)) throw httpError(403, 'Sin permiso para ver el historial');
-  const rows = all(`SELECT id, ts, user_name, action, summary, changes, ip FROM audit_log WHERE entity = 'record' AND entity_id = ? ORDER BY id DESC`, rec.id);
+  const rows = await all(`SELECT id, ts, user_name, action, summary, changes, ip FROM audit_log WHERE entity = 'record' AND entity_id = ? ORDER BY id DESC`, rec.id);
   res.json(rows.map((r) => ({ ...r, changes: r.changes ? JSON.parse(r.changes) : [] })));
 }));
 
@@ -325,17 +334,18 @@ function passwordField(req, key) {
   if (!f) throw httpError(400, 'Campo de contraseña no válido');
   return f;
 }
-router.get('/:appKey/records/:id/password/:field', wrap((req, res) => {
-  const rec = getRecord(req, req.params.id);
+router.get('/:appKey/records/:id/password/:field', wrap(async (req, res) => {
+  const rec = await getRecord(req, req.params.id);
   const f = passwordField(req, req.params.field);
   if (!can(req.grants, 'view_passwords', req.user, rec)) throw httpError(403, 'Sin permiso para ver contraseñas');
   const value = decrypt(JSON.parse(rec.data)[f.key]);
-  audit(req, { entity: 'record', entityId: rec.id, action: 'reveal', appId: req.appDef.id, companyId: req.companyId, summary: `Contraseña consultada: ${f.label}` });
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'reveal', appId: req.appDef.id, companyId: req.companyId, summary: `Contraseña consultada: ${f.label}` });
   res.json({ value });
 }));
 
 router.post('/:appKey/records/:id/share', wrap(async (req, res) => {
-  const rec = getRecord(req, req.params.id);
+  const rec = await getRecord(req, req.params.id);
+  if (rec.deleted_at) throw httpError(400, 'El registro está en la papelera');
   const f = passwordField(req, (req.body || {}).field);
   if (!can(req.grants, 'share_passwords', req.user, rec)) throw httpError(403, 'Sin permiso para enviar contraseñas');
   const { channel, to = '', hours = 24, include_plain = false, max_views = 1 } = req.body;
@@ -345,9 +355,9 @@ router.post('/:appKey/records/:id/share', wrap(async (req, res) => {
   const title = data[req.appDef.title_field] || `#${rec.id}`;
   const code = shortCode(10);
   const h = Math.min(Math.max(Number(hours) || 24, 1), 24 * 30);
-  run(`INSERT INTO share_links (code, record_id, field_key, created_by, expires_at, max_views) VALUES (?,?,?,?,?,?)`,
-    code, rec.id, f.key, req.user.id, new Date(Date.now() + h * 3600e3).toISOString(), Math.min(Math.max(Number(max_views) || 1, 1), 20));
-  const link = `${publicUrl(req)}/s/${code}`;
+  await run(`INSERT INTO share_links (code, record_id, field_key, created_by, expires_at, max_views) VALUES (?,?,?,?,?,?)`,
+    code, rec.id, f.key, req.user.id, sqlDate(Date.now() + h * 3600e3), Math.min(Math.max(Number(max_views) || 1, 1), 20));
+  const link = `${await publicUrl(req)}/s/${code}`;
   const text = include_plain
     ? `${req.appDef.name} · ${title}\n${f.label}: ${secret}`
     : `${req.appDef.name} · ${title}\nConsulta "${f.label}" en este enlace de un solo uso (caduca en ${h} h):\n${link}`;
@@ -357,22 +367,20 @@ router.post('/:appKey/records/:id/share', wrap(async (req, res) => {
     await sendMail({ to, subject: `${req.appDef.name}: ${title}`, text });
     result.sent = true;
   } else if (channel === 'whatsapp') {
-    const phone = String(to).replace(/[^\d]/g, '');
-    result.url = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+    result.url = `https://wa.me/${String(to).replace(/[^\d]/g, '')}?text=${encodeURIComponent(text)}`;
   } else if (channel === 'sms') {
     result.url = `sms:${String(to).replace(/[^\d+]/g, '')}?body=${encodeURIComponent(text)}`;
   }
-  audit(req, { entity: 'record', entityId: rec.id, action: 'share', appId: req.appDef.id, companyId: req.companyId,
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'share', appId: req.appDef.id, companyId: req.companyId,
     summary: `Contraseña "${f.label}" compartida por ${channel || 'enlace'}${to ? ' a ' + to : ''}${include_plain ? ' (en claro)' : ' (enlace de un solo uso)'}` });
   res.json(result);
 }));
 
 // ---------- exportación ----------
-function exportRows(req) {
-  const q = { ...req.query };
-  const { where, params, order } = listQuery(req, q);
-  const ids = q.ids ? String(q.ids).split(',').map(Number).filter(Boolean) : null;
-  let rows = all(`${SELECT_REC} WHERE ${where} ORDER BY ${order}, r.id DESC`, ...params);
+async function exportRows(req) {
+  const { where, params, order } = listQuery(req, req.query);
+  const ids = req.query.ids ? String(req.query.ids).split(',').map(Number).filter(Boolean) : null;
+  let rows = await all(`${SELECT_REC} WHERE ${where} ORDER BY ${order}, r.id DESC`, ...params);
   if (ids) rows = rows.filter((r) => ids.includes(r.id));
   return rows;
 }
@@ -399,8 +407,8 @@ async function sendSheet(res, name, header, matrix, format) {
 router.get('/:appKey/export', wrap(async (req, res) => {
   if (!req.grants.export.length) throw httpError(403, 'Sin permiso de exportación');
   const withPw = req.query.passwords === '1' && req.grants.view_passwords.length > 0;
-  const rows = exportRows(req);
-  const users = Object.fromEntries(activeUsers().map((u) => [u.id, u]));
+  const rows = await exportRows(req);
+  const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
   const fields = req.fields.filter((f) => f.type !== 'password' || withPw);
   const header = ['ID', 'Centro', ...fields.map((f) => f.label), 'Creado', 'Modificado', 'Estado'];
   const matrix = rows.map((r) => {
@@ -410,7 +418,7 @@ router.get('/:appKey/export', wrap(async (req, res) => {
       ...fields.map((f) => (f.type === 'password' ? (rowCanPw ? decrypt(d[f.key]) : '') : toText(f, d[f.key], users))),
       r.created_at, r.updated_at, r.deleted_at ? 'BORRADO' : 'Activo'];
   });
-  audit(req, { entity: 'app', entityId: req.appDef.id, action: 'export', appId: req.appDef.id, companyId: req.companyId,
+  await audit(req, { entity: 'app', entityId: req.appDef.id, action: 'export', appId: req.appDef.id, companyId: req.companyId,
     summary: `Exportación ${req.query.format === 'csv' ? 'CSV' : 'Excel'} de ${rows.length} registros${withPw ? ' (con contraseñas)' : ''}` });
   await sendSheet(res, req.appDef.key, header, matrix, req.query.format);
 }));
@@ -463,7 +471,7 @@ router.post('/:appKey/import/preview', upload.single('file'), wrap(async (req, r
     ...req.fields.map((f) => ({ key: f.key, label: f.label, type: f.type }))];
   const mapping = header.map((h) => {
     const n = norm(h);
-    if (['id'].includes(n)) return '_id';
+    if (n === 'id') return '_id';
     if (['centro', 'center', 'centrodetrabajo', 'centrodecoste', 'cc'].includes(n)) return '_center';
     const f = req.fields.find((x) => norm(x.label) === n || norm(x.key) === n);
     return f ? f.key : '';
@@ -473,13 +481,13 @@ router.post('/:appKey/import/preview', upload.single('file'), wrap(async (req, r
   res.json({ token, header, mapping, targets, total: rows.length, sample: rows.slice(0, 5) });
 }));
 
-router.post('/:appKey/import/commit', wrap((req, res) => {
+router.post('/:appKey/import/commit', wrap(async (req, res) => {
   if (!req.grants.import.length) throw httpError(403, 'Sin permiso de importación');
   const { token, mapping = [], default_center = null, match_field = '', dry_run = false } = req.body || {};
   const p = pendingImports.get(token);
   if (!p || p.userId !== req.user.id || p.appId !== req.appDef.id || p.companyId !== req.companyId) throw httpError(400, 'La importación ha caducado, vuelve a subir el fichero');
-  const centers = companyCenters(req.companyId);
-  const users = activeUsers();
+  const centers = await companyCenters(req.companyId);
+  const users = await activeUsers();
   const findCenter = (v) => {
     const s = norm(v);
     if (!s) return undefined;
@@ -487,64 +495,61 @@ router.post('/:appKey/import/commit', wrap((req, res) => {
     if (!c) throw new Error(`Centro "${v}" no encontrado`);
     return c.id;
   };
-  const matchF = match_field ? req.fields.find((f) => f.key === match_field) : null;
-  const pwKeys = req.fields.filter((f) => f.type === 'password').map((f) => f.key);
+  const matchF = match_field ? req.fields.find((f) => f.key === match_field && f.type !== 'password') : null;
   const result = { created: 0, updated: 0, skipped: 0, errors: [] };
 
-  const doImport = () => {
-    p.rows.forEach((row, i) => {
-      const line = i + 2;
-      try {
-        const input = {}; let centerId; let recId = null;
-        mapping.forEach((target, col) => {
-          if (!target) return;
-          const v = row[col];
-          if (target === '_id') { if (String(v).trim()) recId = Number(v); }
-          else if (target === '_center') centerId = findCenter(v);
-          else input[target] = v instanceof Date ? v : (v ?? '');
-        });
-        let existing = null;
-        if (recId) existing = get('SELECT * FROM records WHERE id = ? AND app_id = ? AND company_id = ? AND deleted_at IS NULL', recId, req.appDef.id, req.companyId);
-        if (!existing && matchF && input[matchF.key] !== undefined && String(input[matchF.key]).trim()) {
-          const v = normalize(matchF, input[matchF.key], { users });
-          existing = get(`SELECT * FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL
-            AND lower(CAST(json_extract(data, ?) AS TEXT)) = lower(?)`, req.appDef.id, req.companyId, `$.${matchF.key}`, String(v));
-        }
-        if (existing) {
-          if (!can(req.grants, 'edit', req.user, existing)) throw new Error('sin permiso para modificar este registro');
-          const newCenter = centerId === undefined ? existing.center_id : centerId;
-          if (newCenter !== existing.center_id) checkCenter(req, newCenter, 'edit');
-          const before = JSON.parse(existing.data);
-          const data = buildData(req, input, before, { users });
-          checkUnique(req, data, existing.id);
-          const changes = diff({ ...before, _centro: existing.center_id }, { ...data, _centro: newCenter }, pwKeys);
-          if (!changes.length) { result.skipped++; return; }
-          if (!dry_run) {
-            run(`UPDATE records SET data = ?, center_id = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?`, JSON.stringify(data), newCenter, req.user.id, existing.id);
-            audit(req, { entity: 'record', entityId: existing.id, action: 'update', appId: req.appDef.id, companyId: req.companyId, summary: 'Modificación por importación', changes });
+  // Cada fila va en su propio SAVEPOINT; en simulación se deshace todo al final.
+  const DRY = Symbol('dry');
+  try {
+    await tx(async () => {
+      for (let i = 0; i < p.rows.length; i++) {
+        const row = p.rows[i];
+        await run(`SAVEPOINT fila`);
+        try {
+          const input = {}; let centerId; let recId = null;
+          mapping.forEach((target, col) => {
+            if (!target) return;
+            const v = row[col];
+            if (target === '_id') { if (String(v).trim()) recId = Number(v); }
+            else if (target === '_center') centerId = findCenter(v);
+            else input[target] = v ?? '';
+          });
+          let existing = null;
+          if (recId) existing = await get('SELECT * FROM records WHERE id = ? AND app_id = ? AND company_id = ? AND deleted_at IS NULL', recId, req.appDef.id, req.companyId);
+          if (!existing && matchF && input[matchF.key] !== undefined && String(input[matchF.key]).trim()) {
+            const v = normalize(matchF, input[matchF.key], { users });
+            existing = await get(`SELECT * FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL
+              AND LOWER(${jv(matchF.key, '')}) = LOWER(?) LIMIT 1`, req.appDef.id, req.companyId, String(v));
           }
-          result.updated++;
-        } else {
-          const cId = centerId === undefined ? (default_center ? Number(default_center) : null) : centerId;
-          checkCenter(req, cId, 'create');
-          const data = buildData(req, input, {}, { users });
-          checkUnique(req, data);
-          if (!dry_run) {
-            const id = Number(run(`INSERT INTO records (app_id, company_id, center_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
-              req.appDef.id, req.companyId, cId, JSON.stringify(data), req.user.id, req.user.id).lastInsertRowid);
-            audit(req, { entity: 'record', entityId: id, action: 'create', appId: req.appDef.id, companyId: req.companyId, summary: 'Alta por importación', changes: diff({}, data, pwKeys) });
+          if (existing) {
+            if (!can(req.grants, 'edit', req.user, existing)) throw new Error('sin permiso para modificar este registro');
+            const newCenter = centerId === undefined ? existing.center_id : centerId;
+            if (newCenter !== existing.center_id) await checkCenter(req, newCenter, 'edit');
+            const data = buildData(req, input, JSON.parse(existing.data), { users });
+            await checkUnique(req, data, existing.id);
+            if (await updateRecord(req, existing, newCenter, data, 'Modificación por importación')) result.updated++;
+            else result.skipped++;
+          } else {
+            const cId = centerId === undefined ? (default_center ? Number(default_center) : null) : centerId;
+            await checkCenter(req, cId, 'create');
+            const data = buildData(req, input, {}, { users });
+            await checkUnique(req, data);
+            await insertRecord(req, cId, data, 'Alta por importación');
+            result.created++;
           }
-          result.created++;
+          await run(`RELEASE SAVEPOINT fila`);
+        } catch (e) {
+          await run(`ROLLBACK TO SAVEPOINT fila`);
+          result.errors.push(`Fila ${i + 2}: ${e.message}`);
         }
-      } catch (e) {
-        result.errors.push(`Fila ${line}: ${e.message}`);
       }
+      if (dry_run) throw DRY;
     });
-  };
-  tx(doImport);
+  } catch (e) { if (e !== DRY) throw e; }
+
   if (!dry_run) {
     pendingImports.delete(token);
-    audit(req, { entity: 'app', entityId: req.appDef.id, action: 'import', appId: req.appDef.id, companyId: req.companyId,
+    await audit(req, { entity: 'app', entityId: req.appDef.id, action: 'import', appId: req.appDef.id, companyId: req.companyId,
       summary: `Importación: ${result.created} altas, ${result.updated} modificaciones, ${result.errors.length} errores` });
   }
   res.json(result);

@@ -6,13 +6,23 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// Requiere un MariaDB accesible (DB_HOST, DB_USER, DB_PASSWORD). Usa la base de datos DB_NAME_TEST (erp_test), que se BORRA.
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'erp-test-'));
 process.env.ADMIN_PASSWORD = 'superadmin123';
-const app = require('../server/index');
+process.env.DB_NAME = process.env.DB_NAME_TEST || 'erp_test';
+const mariadb = require('mariadb');
 
-let server, base;
-before(() => new Promise((r) => { server = app.listen(0, () => { base = `http://127.0.0.1:${server.address().port}`; r(); }); }));
-after(() => { server.close(); fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); });
+let app, db, server, base;
+before(async () => {
+  const c = await mariadb.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT) || 3306, user: process.env.DB_USER || 'erp', password: process.env.DB_PASSWORD ?? 'erp' });
+  await c.query(`DROP DATABASE IF EXISTS \`${process.env.DB_NAME}\``);
+  await c.end();
+  app = require('../server/index');
+  db = require('../server/db');
+  await app.ready;
+  await new Promise((r) => { server = app.listen(0, () => { base = `http://127.0.0.1:${server.address().port}`; r(); }); });
+});
+after(async () => { server.close(); await db.close(); fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); });
 
 function client() {
   let cookie = '';
@@ -62,8 +72,7 @@ test('alta, validación y unicidad', async () => {
 });
 
 test('contraseñas cifradas en BD y visibles para super admin', async () => {
-  const { get } = require('../server/db');
-  const raw = JSON.parse(get('SELECT data FROM records WHERE id = ?', ids.v1).data);
+  const raw = JSON.parse((await db.get('SELECT data FROM records WHERE id = ?', ids.v1)).data);
   assert.match(raw.pin_tarjeta, /^enc:v1:/);
   const r = await admin.call('GET', `/apps/vehiculos/records/${ids.v1}/password/pin_tarjeta`);
   assert.equal(r.body.value, '9876');
@@ -160,4 +169,22 @@ test('diseño de columnas por usuario', async () => {
   await admin.call('PUT', '/apps/vehiculos/layout/list', { columns: ['matricula', '_center'] });
   const m = await admin.call('GET', '/apps/vehiculos');
   assert.deepEqual(m.body.layouts.list.columns, ['matricula', '_center']);
+});
+
+test('orden numérico y filtro por columna', async () => {
+  const asc = await admin.call('GET', '/apps/vehiculos/records?sort=km&dir=asc');
+  const kms = asc.body.rows.map((r) => r.data.km).filter((k) => k !== '');
+  assert.deepEqual(kms, [...kms].sort((a, b) => a - b));
+  const f = await admin.call('GET', '/apps/vehiculos/records?f_combustible=Gasolina');
+  assert.deepEqual(f.body.rows.map((r) => r.data.matricula), ['NUEVA1']);
+});
+
+test('la simulación detecta duplicados dentro del mismo fichero y no guarda nada', async () => {
+  const csv = 'Matrícula;Marca\nDUP1;A\nDUP1;B\n';
+  const fd = new FormData(); fd.append('file', new Blob([csv], { type: 'text/csv' }), 'd.csv');
+  const p = await admin.call('POST', '/apps/vehiculos/import/preview', undefined, { form: fd });
+  const dry = await admin.call('POST', '/apps/vehiculos/import/commit', { token: p.body.token, mapping: p.body.mapping, dry_run: true });
+  assert.deepEqual([dry.body.created, dry.body.errors.length], [1, 1]);
+  const l = await admin.call('GET', '/apps/vehiculos/records?q=DUP1');
+  assert.equal(l.body.total, 0);
 });

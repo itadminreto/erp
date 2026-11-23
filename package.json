@@ -4,9 +4,9 @@
   "description": "Plataforma multi-empresa de aplicaciones dinámicas (credenciales, correo, fibras, líneas, vehículos, recados)",
   "main": "server/index.js",
   "scripts": {
-    "start": "node --no-warnings server/index.js",
-    "dev": "node --no-warnings --watch server/index.js",
-    "test": "node --no-warnings --test test/*.test.js"
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",
@@ -21,12 +21,13 @@
     "bcryptjs": "^3.0.3",
     "exceljs": "^4.4.0",
     "express": "^4.22.3",
+    "mariadb": "^3.5.5",
     "multer": "^2.5.0",
     "nodemailer": "^10.6.1",
     "sortablejs": "^1.15.7"
   },
   "private": true,
   "engines": {
-    "node": ">=22.13"
+    "node": ">=18.18"
   }
 }

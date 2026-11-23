@@ -1,6 +1,6 @@
 'use strict';
 const bcrypt = require('bcryptjs');
-const { all, get, run } = require('./db');
+const { all, get, run, sqlDate } = require('./db');
 const { token } = require('./crypto');
 
 const COOKIE = 'erp_session';
@@ -20,36 +20,36 @@ function parseCookies(header = '') {
   return out;
 }
 
-function createSession(res, userId) {
+async function createSession(res, userId) {
   const t = token();
-  const exp = new Date(Date.now() + SESSION_DAYS * 864e5).toISOString();
-  run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)', t, userId, exp);
+  const exp = sqlDate(Date.now() + SESSION_DAYS * 864e5);
+  await run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)', t, userId, exp);
   res.setHeader('Set-Cookie', `${COOKIE}=${t}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${process.env.COOKIE_SECURE === '1' ? '; Secure' : ''}`);
 }
-function destroySession(req, res) {
+async function destroySession(req, res) {
   const t = parseCookies(req.headers.cookie)[COOKIE];
-  if (t) run('DELETE FROM sessions WHERE token = ?', t);
+  if (t) await run('DELETE FROM sessions WHERE token = ?', t);
   res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
 }
 
 /** Middleware: carga req.user y req.companyId (empresa activa) si hay sesión. */
-function loadUser(req, _res, next) {
-  const t = parseCookies(req.headers.cookie)[COOKIE];
-  if (t) {
-    const row = get(
-      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token = ? AND s.expires_at > ? AND u.active = 1 AND u.deleted_at IS NULL`,
-      t, new Date().toISOString()
-    );
-    if (row) {
-      req.user = row;
-      req.user.is_superadmin = !!row.is_superadmin;
-      const companies = userCompanies(row);
-      req.companies = companies;
-      const wanted = Number(req.headers['x-company-id']) || null;
-      req.companyId = companies.some((c) => c.id === wanted) ? wanted : (companies[0] ? companies[0].id : null);
+async function loadUser(req, _res, next) {
+  try {
+    const t = parseCookies(req.headers.cookie)[COOKIE];
+    if (t) {
+      const row = await get(
+        `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token = ? AND s.expires_at > UTC_TIMESTAMP() AND u.active = 1 AND u.deleted_at IS NULL`, t);
+      if (row) {
+        req.user = row;
+        req.user.is_superadmin = !!row.is_superadmin;
+        const companies = await userCompanies(row);
+        req.companies = companies;
+        const wanted = Number(req.headers['x-company-id']) || null;
+        req.companyId = companies.some((c) => c.id === wanted) ? wanted : (companies[0] ? companies[0].id : null);
+      }
     }
-  }
+  } catch (e) { return next(e); }
   next();
 }
 
@@ -63,7 +63,7 @@ function requireSuper(req, res, next) {
   next();
 }
 
-function userCompanies(user) {
+async function userCompanies(user) {
   if (user.is_superadmin) {
     return all('SELECT id, name FROM companies WHERE deleted_at IS NULL AND active = 1 ORDER BY name');
   }
@@ -77,13 +77,13 @@ function userCompanies(user) {
  * Concesiones de un usuario para una app dentro de una empresa.
  * Devuelve { perm: [{center: id|null, own: bool}] } — null center = todos los centros.
  */
-function grantsFor(user, companyId, appId) {
+async function grantsFor(user, companyId, appId) {
   const grants = Object.fromEntries(PERMS.map((p) => [p, []]));
   if (user.is_superadmin) {
     PERMS.forEach((p) => grants[p].push({ center: null, own: false }));
     return grants;
   }
-  const rows = all(
+  const rows = await all(
     `SELECT a.center_id, rp.* FROM user_assignments a
      JOIN roles r ON r.id = a.role_id AND r.deleted_at IS NULL
      JOIN role_permissions rp ON rp.role_id = a.role_id AND rp.app_id = ?

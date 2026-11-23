@@ -2,12 +2,12 @@
 const { run } = require('./db');
 
 /** Registra una acción en la tabla de trazabilidad. */
-function audit(req, { entity, entityId = null, action, summary = '', changes = null, appId = null, companyId = null }) {
+async function audit(req, { entity, entityId = null, action, summary = '', changes = null, appId = null, companyId = null }) {
   const u = req && req.user;
-  run(
+  await run(
     `INSERT INTO audit_log (user_id, user_name, company_id, app_id, entity, entity_id, action, summary, changes, ip)
      VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    u ? u.id : null, u ? u.name : 'sistema', companyId, appId, entity, entityId, action, summary,
+    u ? u.id : null, u ? u.name : 'sistema', companyId, appId, entity, entityId, action, String(summary || '').slice(0, 1000),
     changes ? JSON.stringify(changes) : null, req ? (req.ip || '') : ''
   );
 }

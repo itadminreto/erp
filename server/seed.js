@@ -110,42 +110,42 @@ const ROLES = [
   ['Consulta', 'Solo lectura', ['view']],
 ];
 
-function seed() {
-  if (get('SELECT COUNT(*) n FROM users').n > 0) return;
-  tx(() => {
+async function seed() {
+  if ((await get('SELECT COUNT(*) n FROM users')).n > 0) return;
+  await tx(async () => {
     const email = process.env.ADMIN_EMAIL || 'admin@erp.local';
     const pass = process.env.ADMIN_PASSWORD || 'admin1234';
-    run(`INSERT INTO users (email, name, password_hash, is_superadmin, must_change_password) VALUES (?,?,?,1,?)`,
+    await run(`INSERT INTO users (email, name, password_hash, is_superadmin, must_change_password) VALUES (?,?,?,1,?)`,
       email, 'Super Administrador', hash(pass), process.env.ADMIN_PASSWORD ? 0 : 1);
-    console.log(`\n  ➜ Super admin creado: ${email} / ${pass}  (cámbiala tras el primer acceso)\n`);
+    if (!process.env.ADMIN_PASSWORD) console.log(`\n  ➜ Super admin creado: ${email} / ${pass}  (cámbiala tras el primer acceso)\n`);
 
-    APPS.forEach((a, i) => {
-      const appId = Number(run('INSERT INTO apps (key, name, icon, color, description, sort, title_field) VALUES (?,?,?,?,?,?,?)',
-        a.key, a.name, a.icon, a.color, a.description, i, a.title).lastInsertRowid);
-      a.fields.forEach(([key, label, type, o = {}], j) => {
+    for (const [i, a] of APPS.entries()) {
+      const appId = Number((await run('INSERT INTO apps (`key`, name, icon, color, description, sort, title_field) VALUES (?,?,?,?,?,?,?)',
+        a.key, a.name, a.icon, a.color, a.description, i, a.title)).lastInsertRowid);
+      for (const [j, [key, label, type, o = {}]] of a.fields.entries()) {
         const { choices, ...rest } = o;
-        run(`INSERT INTO fields (app_id, key, label, type, options, required, unique_value, show_in_list, width, sort)
+        await run(`INSERT INTO fields (app_id, \`key\`, label, type, options, required, unique_value, show_in_list, width, sort)
              VALUES (?,?,?,?,?,?,?,?,?,?)`,
           appId, key, label, type, choices ? JSON.stringify({ choices }) : null,
           rest.required || 0, rest.unique_value || 0, rest.show_in_list ?? 1,
           rest.width || (type === 'textarea' ? 'full' : 'half'), j);
-      });
-    });
+      }
+    }
 
-    const apps = all('SELECT id FROM apps');
+    const apps = await all('SELECT id FROM apps');
+    const cols = PERMS.map((p) => 'can_' + p);
     for (const [name, desc, perms] of ROLES) {
-      const roleId = Number(run('INSERT INTO roles (name, description) VALUES (?,?)', name, desc).lastInsertRowid);
+      const roleId = Number((await run('INSERT INTO roles (name, description) VALUES (?,?)', name, desc)).lastInsertRowid);
       for (const app of apps) {
-        const cols = PERMS.map((p) => 'can_' + p);
-        run(`INSERT INTO role_permissions (role_id, app_id, ${cols.join(',')}) VALUES (?,?,${cols.map(() => '?').join(',')})`,
+        await run(`INSERT INTO role_permissions (role_id, app_id, ${cols.join(',')}) VALUES (?,?,${cols.map(() => '?').join(',')})`,
           roleId, app.id, ...PERMS.map((p) => (perms.includes(p) ? 1 : 0)));
       }
     }
 
     if (process.env.SEED_DEMO !== '0') {
-      const cid = Number(run(`INSERT INTO companies (name, cif) VALUES ('Empresa Demo', 'B00000000')`).lastInsertRowid);
-      run(`INSERT INTO centers (company_id, code, name, kind) VALUES (?, 'CC01', 'Sede central', 'ambos')`, cid);
-      run(`INSERT INTO centers (company_id, code, name, kind) VALUES (?, 'CC02', 'Centro Norte', 'trabajo')`, cid);
+      const cid = Number((await run(`INSERT INTO companies (name, cif) VALUES ('Empresa Demo', 'B00000000')`)).lastInsertRowid);
+      await run(`INSERT INTO centers (company_id, code, name, kind) VALUES (?, 'CC01', 'Sede central', 'ambos')`, cid);
+      await run(`INSERT INTO centers (company_id, code, name, kind) VALUES (?, 'CC02', 'Centro Norte', 'trabajo')`, cid);
     }
   });
 }

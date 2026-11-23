@@ -1,164 +1,240 @@
 'use strict';
+// Capa de acceso a MariaDB: pool de conexiones, transacciones y creación del esquema.
 const fs = require('fs');
 const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+const { AsyncLocalStorage } = require('async_hooks');
+const mariadb = require('mariadb');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'erp.sqlite');
 
-const db = new DatabaseSync(DB_FILE);
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+const DB_NAME = process.env.DB_NAME || 'erp';
+if (!/^[A-Za-z0-9_]+$/.test(DB_NAME)) throw new Error('DB_NAME no válido');
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS companies (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  cif TEXT, address TEXT, email TEXT, phone TEXT, notes TEXT,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  deleted_at TEXT
-);
-CREATE TABLE IF NOT EXISTS centers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  company_id INTEGER NOT NULL REFERENCES companies(id),
-  code TEXT, name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'trabajo',   -- trabajo | coste | ambos
-  address TEXT, notes TEXT,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  deleted_at TEXT
-);
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  name TEXT NOT NULL,
-  phone TEXT,
-  password_hash TEXT,
-  is_superadmin INTEGER NOT NULL DEFAULT 0,
-  active INTEGER NOT NULL DEFAULT 1,
-  must_change_password INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  last_login TEXT,
-  deleted_at TEXT
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  expires_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS apps (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  key TEXT NOT NULL UNIQUE,
-  name TEXT NOT NULL,
-  icon TEXT, color TEXT, description TEXT,
-  sort INTEGER NOT NULL DEFAULT 0,
-  active INTEGER NOT NULL DEFAULT 1,
-  title_field TEXT
-);
-CREATE TABLE IF NOT EXISTS fields (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  app_id INTEGER NOT NULL REFERENCES apps(id),
-  key TEXT NOT NULL,
-  label TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'text',
-  options TEXT,                      -- JSON: { choices: [...] }
-  required INTEGER NOT NULL DEFAULT 0,
-  unique_value INTEGER NOT NULL DEFAULT 0,
-  show_in_list INTEGER NOT NULL DEFAULT 1,
-  width TEXT NOT NULL DEFAULT 'half', -- half | full
-  help TEXT,
-  sort INTEGER NOT NULL DEFAULT 0,
-  active INTEGER NOT NULL DEFAULT 1,
-  UNIQUE(app_id, key)
-);
-CREATE TABLE IF NOT EXISTS roles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  description TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  deleted_at TEXT
-);
-CREATE TABLE IF NOT EXISTS role_permissions (
-  role_id INTEGER NOT NULL REFERENCES roles(id),
-  app_id INTEGER NOT NULL REFERENCES apps(id),
-  can_view INTEGER NOT NULL DEFAULT 0,
-  can_create INTEGER NOT NULL DEFAULT 0,
-  can_edit INTEGER NOT NULL DEFAULT 0,
-  can_delete INTEGER NOT NULL DEFAULT 0,
-  can_view_trash INTEGER NOT NULL DEFAULT 0,
-  can_restore INTEGER NOT NULL DEFAULT 0,
-  can_purge INTEGER NOT NULL DEFAULT 0,
-  can_import INTEGER NOT NULL DEFAULT 0,
-  can_export INTEGER NOT NULL DEFAULT 0,
-  can_view_passwords INTEGER NOT NULL DEFAULT 0,
-  can_share_passwords INTEGER NOT NULL DEFAULT 0,
-  can_view_history INTEGER NOT NULL DEFAULT 0,
-  only_own INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (role_id, app_id)
-);
-CREATE TABLE IF NOT EXISTS user_assignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  role_id INTEGER NOT NULL REFERENCES roles(id),
-  company_id INTEGER NOT NULL REFERENCES companies(id),
-  center_id INTEGER REFERENCES centers(id)   -- NULL = todos los centros de la empresa
-);
-CREATE TABLE IF NOT EXISTS records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  app_id INTEGER NOT NULL REFERENCES apps(id),
-  company_id INTEGER NOT NULL REFERENCES companies(id),
-  center_id INTEGER REFERENCES centers(id),
-  data TEXT NOT NULL DEFAULT '{}',
-  created_by INTEGER, updated_by INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  deleted_at TEXT, deleted_by INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_records_app ON records(app_id, company_id, deleted_at);
-CREATE TABLE IF NOT EXISTS audit_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts TEXT NOT NULL DEFAULT (datetime('now')),
-  user_id INTEGER, user_name TEXT,
-  company_id INTEGER, app_id INTEGER,
-  entity TEXT NOT NULL, entity_id INTEGER,
-  action TEXT NOT NULL,
-  summary TEXT,
-  changes TEXT,
-  ip TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity, entity_id);
-CREATE TABLE IF NOT EXISTS user_layouts (
-  user_id INTEGER NOT NULL,
-  app_id INTEGER NOT NULL,
-  kind TEXT NOT NULL,         -- list | form
-  config TEXT NOT NULL,
-  PRIMARY KEY (user_id, app_id, kind)
-);
-CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT
-);
-CREATE TABLE IF NOT EXISTS share_links (
-  code TEXT PRIMARY KEY,
-  record_id INTEGER NOT NULL,
-  field_key TEXT NOT NULL,
-  created_by INTEGER NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  expires_at TEXT NOT NULL,
-  max_views INTEGER NOT NULL DEFAULT 1,
-  views INTEGER NOT NULL DEFAULT 0
-);
-`);
+const pool = mariadb.createPool({
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT) || 3306,
+  user: process.env.DB_USER || 'erp',
+  password: process.env.DB_PASSWORD ?? 'erp',
+  database: DB_NAME,
+  connectionLimit: Number(process.env.DB_POOL) || 10,
+  charset: 'utf8mb4',
+  dateStrings: true,
+  bigIntAsNumber: true,
+  insertIdAsNumber: true,
+  decimalAsNumber: true,
+  autoJsonMap: false, // las columnas JSON llegan como texto (se parsean en el código)
+  initSql: "SET time_zone = '+00:00'", // todas las fechas se guardan en UTC
+});
 
-function tx(fn) {
-  db.exec('BEGIN');
-  try { const r = fn(); db.exec('COMMIT'); return r; }
-  catch (e) { db.exec('ROLLBACK'); throw e; }
+// Las consultas hechas dentro de tx() usan la misma conexión (y por tanto la misma transacción).
+const txStore = new AsyncLocalStorage();
+
+async function query(sql, params = []) {
+  const conn = txStore.getStore();
+  return conn ? conn.query(sql, params) : pool.query(sql, params);
+}
+const all = async (sql, ...p) => Array.from(await query(sql, p));
+const get = async (sql, ...p) => (await query(sql, p))[0];
+const run = async (sql, ...p) => { const r = await query(sql, p); return { lastInsertRowid: r.insertId, changes: r.affectedRows }; };
+
+async function tx(fn) {
+  if (txStore.getStore()) return fn(); // transacción anidada: reutiliza la actual
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const r = await txStore.run(conn, fn);
+    await conn.commit();
+    return r;
+  } catch (e) {
+    await conn.rollback().catch(() => {});
+    throw e;
+  } finally {
+    conn.release();
+  }
 }
 
-const all = (sql, ...p) => db.prepare(sql).all(...p);
-const get = (sql, ...p) => db.prepare(sql).get(...p);
-const run = (sql, ...p) => db.prepare(sql).run(...p);
+/** Fecha JS → 'YYYY-MM-DD HH:MM:SS' (UTC) para columnas DATETIME. */
+const sqlDate = (d) => new Date(d).toISOString().slice(0, 19).replace('T', ' ');
 
-module.exports = { db, all, get, run, tx, DATA_DIR };
+const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS companies (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    cif VARCHAR(30), address VARCHAR(300), email VARCHAR(200), phone VARCHAR(50), notes TEXT,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS centers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    company_id INT NOT NULL,
+    code VARCHAR(50), name VARCHAR(200) NOT NULL,
+    kind VARCHAR(20) NOT NULL DEFAULT 'trabajo',
+    address VARCHAR(300), notes TEXT,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME NULL,
+    CONSTRAINT fk_centers_company FOREIGN KEY (company_id) REFERENCES companies(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(200) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    phone VARCHAR(50),
+    password_hash VARCHAR(100),
+    is_superadmin TINYINT(1) NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login DATETIME NULL,
+    deleted_at DATETIME NULL,
+    UNIQUE KEY uq_users_email (email)
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    token VARCHAR(64) PRIMARY KEY,
+    user_id INT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    KEY idx_sessions_user (user_id),
+    CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS apps (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    \`key\` VARCHAR(50) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    icon VARCHAR(20), color VARCHAR(20), description VARCHAR(500),
+    sort INT NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    title_field VARCHAR(50),
+    UNIQUE KEY uq_apps_key (\`key\`)
+  )`,
+  `CREATE TABLE IF NOT EXISTS fields (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    app_id INT NOT NULL,
+    \`key\` VARCHAR(50) NOT NULL,
+    label VARCHAR(150) NOT NULL,
+    type VARCHAR(20) NOT NULL DEFAULT 'text',
+    options TEXT,
+    required TINYINT(1) NOT NULL DEFAULT 0,
+    unique_value TINYINT(1) NOT NULL DEFAULT 0,
+    show_in_list TINYINT(1) NOT NULL DEFAULT 1,
+    width VARCHAR(10) NOT NULL DEFAULT 'half',
+    help VARCHAR(500),
+    sort INT NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    UNIQUE KEY uq_fields_app_key (app_id, \`key\`),
+    CONSTRAINT fk_fields_app FOREIGN KEY (app_id) REFERENCES apps(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS roles (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description VARCHAR(500),
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id INT NOT NULL,
+    app_id INT NOT NULL,
+    can_view TINYINT(1) NOT NULL DEFAULT 0,
+    can_create TINYINT(1) NOT NULL DEFAULT 0,
+    can_edit TINYINT(1) NOT NULL DEFAULT 0,
+    can_delete TINYINT(1) NOT NULL DEFAULT 0,
+    can_view_trash TINYINT(1) NOT NULL DEFAULT 0,
+    can_restore TINYINT(1) NOT NULL DEFAULT 0,
+    can_purge TINYINT(1) NOT NULL DEFAULT 0,
+    can_import TINYINT(1) NOT NULL DEFAULT 0,
+    can_export TINYINT(1) NOT NULL DEFAULT 0,
+    can_view_passwords TINYINT(1) NOT NULL DEFAULT 0,
+    can_share_passwords TINYINT(1) NOT NULL DEFAULT 0,
+    can_view_history TINYINT(1) NOT NULL DEFAULT 0,
+    only_own TINYINT(1) NOT NULL DEFAULT 0,
+    PRIMARY KEY (role_id, app_id),
+    CONSTRAINT fk_rp_role FOREIGN KEY (role_id) REFERENCES roles(id),
+    CONSTRAINT fk_rp_app FOREIGN KEY (app_id) REFERENCES apps(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS user_assignments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    role_id INT NOT NULL,
+    company_id INT NOT NULL,
+    center_id INT NULL,
+    KEY idx_asg_user (user_id, company_id),
+    CONSTRAINT fk_asg_user FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk_asg_role FOREIGN KEY (role_id) REFERENCES roles(id),
+    CONSTRAINT fk_asg_company FOREIGN KEY (company_id) REFERENCES companies(id),
+    CONSTRAINT fk_asg_center FOREIGN KEY (center_id) REFERENCES centers(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS records (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    app_id INT NOT NULL,
+    company_id INT NOT NULL,
+    center_id INT NULL,
+    data LONGTEXT NOT NULL CHECK (JSON_VALID(data)),
+    created_by INT NULL, updated_by INT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME NULL, deleted_by INT NULL,
+    KEY idx_records_app (app_id, company_id, deleted_at),
+    KEY idx_records_center (center_id),
+    CONSTRAINT fk_records_app FOREIGN KEY (app_id) REFERENCES apps(id),
+    CONSTRAINT fk_records_company FOREIGN KEY (company_id) REFERENCES companies(id),
+    CONSTRAINT fk_records_center FOREIGN KEY (center_id) REFERENCES centers(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user_id INT NULL, user_name VARCHAR(200),
+    company_id INT NULL, app_id INT NULL,
+    entity VARCHAR(30) NOT NULL, entity_id INT NULL,
+    action VARCHAR(30) NOT NULL,
+    summary VARCHAR(1000),
+    changes LONGTEXT,
+    ip VARCHAR(64),
+    KEY idx_audit_entity (entity, entity_id),
+    KEY idx_audit_ts (ts),
+    KEY idx_audit_app (app_id),
+    KEY idx_audit_user (user_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS user_layouts (
+    user_id INT NOT NULL,
+    app_id INT NOT NULL,
+    kind VARCHAR(10) NOT NULL,
+    config TEXT NOT NULL,
+    PRIMARY KEY (user_id, app_id, kind)
+  )`,
+  `CREATE TABLE IF NOT EXISTS settings (
+    \`key\` VARCHAR(50) PRIMARY KEY,
+    value TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS share_links (
+    code VARCHAR(20) PRIMARY KEY,
+    record_id INT NOT NULL,
+    field_key VARCHAR(50) NOT NULL,
+    created_by INT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL,
+    max_views INT NOT NULL DEFAULT 1,
+    views INT NOT NULL DEFAULT 0,
+    KEY idx_share_record (record_id)
+  )`,
+];
+
+/** Crea la base de datos (si el usuario tiene permiso) y las tablas. */
+async function init() {
+  if (process.env.DB_CREATE !== '0') {
+    const c = await mariadb.createConnection({
+      host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT) || 3306,
+      user: process.env.DB_USER || 'erp', password: process.env.DB_PASSWORD ?? 'erp',
+    });
+    try { await c.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`); }
+    catch { /* sin permiso para crear BD: se asume que ya existe */ }
+    finally { await c.end(); }
+  }
+  for (const sql of SCHEMA) {
+    await pool.query(sql.replace(/\)\s*$/, ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'));
+  }
+}
+
+const close = () => pool.end();
+
+module.exports = { pool, all, get, run, tx, init, close, sqlDate, DATA_DIR, DB_NAME };

@@ -5,7 +5,28 @@ aplicación que se cree desde el panel de super admin, sin programar).
 
 ## Puesta en marcha
 
-Requisitos: **Node.js ≥ 22.13** (usa el SQLite integrado de Node, no hace falta servidor de base de datos).
+La aplicación usa **MariaDB** (10.6 o superior) como base de datos y **Node.js ≥ 18**.
+
+### Opción A: Docker (MariaDB + aplicación)
+
+```bash
+docker compose up -d
+```
+
+Abre http://localhost:3000. Cambia antes las claves `DB_PASSWORD`, `DB_ROOT_PASSWORD` y `APP_SECRET` (en un fichero `.env` junto a `docker-compose.yml`).
+
+### Opción B: MariaDB ya instalado
+
+1. Crea la base de datos y un usuario (como root en MariaDB):
+
+```sql
+CREATE DATABASE erp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'erp'@'%' IDENTIFIED BY 'cambia_esta_clave';
+GRANT ALL PRIVILEGES ON erp.* TO 'erp'@'%';
+```
+
+2. Copia `.env.example` a `.env`, rellena `DB_HOST`, `DB_USER`, `DB_PASSWORD`… y exporta las variables (o defínelas en el servicio).
+3. Instala y arranca:
 
 ```bash
 npm install
@@ -15,34 +36,46 @@ npm install
 npm start
 ```
 
-Abre http://localhost:3000. En el primer arranque se crea el super admin `admin@erp.local` / `admin1234`
+Las tablas se crean solas en el primer arranque. También se crean el super admin `admin@erp.local` / `admin1234`
 (se obliga a cambiarla en el primer acceso), una empresa de ejemplo con dos centros, las 6 aplicaciones con sus campos
 y tres roles (Admin centro, Editor, Consulta).
 
-Pruebas de integración de la API:
+### Pruebas
+
+Necesitan un MariaDB accesible; usan (y **borran**) la base de datos `erp_test`, así que el usuario debe tener permiso sobre ella:
 
 ```bash
 npm test
 ```
 
-### Variables de entorno (opcionales)
+### Variables de entorno
 
 | Variable | Uso |
 |---|---|
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | Conexión a MariaDB (por defecto `127.0.0.1:3306`, base `erp`, usuario `erp`) |
+| `DB_CREATE=0` | No intentar `CREATE DATABASE` al arrancar |
+| `DB_POOL` | Número máximo de conexiones (10) |
 | `PORT` | Puerto HTTP (3000) |
-| `DATA_DIR` | Carpeta de la base de datos y la clave de cifrado (`./data`) |
-| `APP_SECRET` | Clave para cifrar contraseñas. Si no se indica se genera `data/secret.key` — **haz copia de seguridad de ese fichero**: sin él no se pueden descifrar las contraseñas |
+| `APP_SECRET` | Clave para cifrar contraseñas. Si no se indica se genera `data/secret.key` — **haz copia de seguridad**: sin ella no se pueden descifrar las contraseñas guardadas en la BD |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Credenciales del super admin inicial |
 | `SEED_DEMO=0` | No crear la empresa de ejemplo |
-| `PUBLIC_URL` | URL pública para los enlaces que se envían (también configurable en Ajustes) |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_SECURE` | Correo saliente (también configurable en Ajustes) |
+| `PUBLIC_URL` | URL pública para los enlaces que se envían (también en Ajustes) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_SECURE` | Correo saliente (también en Ajustes) |
 | `COOKIE_SECURE=1`, `TRUST_PROXY=1` | Al publicar detrás de HTTPS / proxy inverso |
+
+### Copias de seguridad
+
+```bash
+mariadb-dump --single-transaction erp > erp_$(date +%F).sql
+```
+
+Guarda también `APP_SECRET` o `data/secret.key`.
 
 ## Cómo cubre cada requisito
 
 | Requisito | Implementación |
 |---|---|
-| **Base de datos** | SQLite (`data/erp.sqlite`). Los datos de cada registro se guardan como JSON, por eso se pueden añadir campos sin migraciones. |
+| **Base de datos** | MariaDB (InnoDB, utf8mb4, transacciones). Los datos de cada registro se guardan en una columna JSON validada, por eso se pueden añadir campos sin tocar la estructura de tablas; las búsquedas, filtros y ordenaciones usan `JSON_VALUE`. |
 | **Usuarios comunes** | Una única tabla de usuarios para todas las apps y empresas. |
 | **Permisos por aplicación dentro de roles** | *Roles y políticas*: matriz rol × aplicación con ver, crear, editar, borrar, ver papelera, restaurar, borrado definitivo, importar, exportar, ver contraseñas, enviar contraseñas, ver historial y «solo sus registros». |
 | **Centros de trabajo / coste** | Cada registro pertenece a un centro. Un usuario recibe *asignaciones* empresa › centro (o todos) › rol, así un admin de centro solo ve su centro. |
@@ -61,12 +94,13 @@ npm test
 ```
 server/
   index.js        arranque, login, sesiones, enlaces compartidos
-  db.js           esquema SQLite
+  db.js           conexión a MariaDB (pool, transacciones) y esquema
   auth.js         sesiones y motor de permisos (rol × app × centro)
   fields.js       tipos de campo, validación y conversión
   routes/records.js  registros, papelera, historial, contraseñas, import/export
   routes/admin.js    panel de super admin y auditoría
   seed.js         datos iniciales (apps, campos, roles)
 public/           frontend (HTML + JS sin compilación)
-test/api.test.js  pruebas de integración
+test/api.test.js  pruebas de integración (contra MariaDB)
+docker-compose.yml  MariaDB + aplicación
 ```
