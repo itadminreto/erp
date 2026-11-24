@@ -12,7 +12,7 @@ const FIELD_TYPES = {
 function parseField(f) {
   let options = {};
   try { options = f.options ? JSON.parse(f.options) : {}; } catch { options = {}; }
-  return { ...f, options, required: !!f.required, unique_value: !!f.unique_value, show_in_list: !!f.show_in_list, active: !!f.active };
+  return { ...f, options, max_length: f.max_length ? Number(f.max_length) : null, required: !!f.required, unique_value: !!f.unique_value, show_in_list: !!f.show_in_list, active: !!f.active };
 }
 async function appFields(appId, includeInactive = false) {
   return (await all(`SELECT * FROM fields WHERE app_id = ? ${includeInactive ? '' : 'AND active = 1'} ORDER BY sort, id`, appId)).map(parseField);
@@ -45,6 +45,9 @@ function normalize(field, raw, ctx = {}) {
     return '';
   }
   const L = field.label;
+  if (field.max_length && ['text', 'textarea', 'email', 'phone', 'url', 'password'].includes(field.type) && String(raw).trim().length > field.max_length) {
+    throw new Error(`${L}: máximo ${field.max_length} caracteres (tiene ${String(raw).trim().length})`);
+  }
   switch (field.type) {
     case 'number': {
       const n = Number(String(raw).replace(/\./g, '').replace(',', '.'));

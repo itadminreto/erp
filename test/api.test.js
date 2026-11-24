@@ -313,3 +313,25 @@ test('campos dinámicos de centros y empresas desde super admin', async () => {
   await admin.call('PUT', `/admin/entity-fields/centers/${f.body.id}`, { active: false });
   assert.equal((await admin.call('PUT', `/admin/centers/${ids.c2}`, { name: 'Centro Norte' })).status, 200);
 });
+
+test('ancho de campo (6 tamaños) y máximo de caracteres', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const veh = apps.find((a) => a.key === 'vehiculos');
+  assert.ok(veh.fields.every((f) => ['xs', 'sm', 'md', 'lg', 'xl', 'full'].includes(f.width)), 'los anchos antiguos se convierten');
+  const mat = veh.fields.find((f) => f.key === 'matricula');
+  assert.equal((await admin.call('PUT', `/admin/fields/${mat.id}`, { width: 'xs', max_length: 8 })).status, 200);
+  const upd = (await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'vehiculos').fields.find((f) => f.key === 'matricula');
+  assert.deepEqual([upd.width, upd.max_length], ['xs', 8]);
+  const long = await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: '123456789' } });
+  assert.equal(long.status, 400); assert.match(long.body.error, /máximo 8 caracteres/);
+  assert.equal((await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'MAX8-OK' } })).status, 201);
+  // valores antiguos se aceptan y se traducen; valores raros caen en «md»; límite inválido da error
+  await admin.call('PUT', `/admin/fields/${mat.id}`, { width: 'half', max_length: '' });
+  let f2 = (await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'vehiculos').fields.find((f) => f.key === 'matricula');
+  assert.deepEqual([f2.width, f2.max_length], ['md', null]);
+  assert.equal((await admin.call('PUT', `/admin/fields/${mat.id}`, { max_length: -3 })).status, 400);
+  const pin = veh.fields.find((f) => f.key === 'pin_tarjeta');
+  await admin.call('PUT', `/admin/fields/${pin.id}`, { max_length: 4 });
+  assert.equal((await admin.call('PUT', `/apps/vehiculos/records/${ids.v1}`, { data: { pin_tarjeta: '123456' } })).status, 400, 'también en contraseñas');
+  await admin.call('PUT', `/admin/fields/${pin.id}`, { max_length: '' });
+});

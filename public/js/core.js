@@ -102,6 +102,7 @@ export function promptDlg(title, fields, { ok = 'Guardar' } = {}) {
         : f.type === 'color' ? h('input', { type: 'color', value: f.value || '#64748b' })
         : h('input', { type: f.type || 'text', ...(INPUT[f.type] || {}), value: f.type === 'iban' && f.value ? String(f.value).replace(/(.{4})/g, '$1 ').trim() : (f.value ?? ''), placeholder: f.placeholder || (INPUT[f.type] || {}).placeholder || '' });
       inp.dataset.kind = f.type || 'text';
+      if (f.max_length && ['INPUT', 'TEXTAREA'].includes(inp.tagName) && inp.type !== 'checkbox') inp.maxLength = f.max_length;
       inputs[f.key] = inp;
       const full = wide && (f.type === 'textarea' || f.full) ? { gridColumn: '1 / -1' } : {};
       items.push(f.type === 'checkbox' ? h('label.check', { style: { ...full, minHeight: '34px' } }, inp, f.label)

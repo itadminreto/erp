@@ -33,7 +33,7 @@ async function simpleEntity(root, { title, sub, path, columns, form, newLabel, o
   const X = 'x:'; // prefijo interno de los campos dinámicos en el formulario
   const extraForm = () => extraFields.map((f, i) => ({
     key: X + f.key, label: f.label, type: f.type === 'user' ? 'select' : f.type, help: f.help || '', required: f.required,
-    section: i === 0 ? 'Datos adicionales' : undefined, full: f.width === 'full',
+    section: i === 0 ? 'Datos adicionales' : undefined, full: ['full', 'xl'].includes(f.width), max_length: f.max_length,
     options: f.type === 'user' ? [{ value: '', label: '—' }, ...users.map((u) => ({ value: u.id, label: u.name }))]
       : f.type === 'select' ? [{ value: '', label: '—' }, ...(f.options.choices || []).map((c) => ({ value: c, label: c }))]
       : f.type === 'multiselect' ? (f.options.choices || []).map((c) => ({ value: c, label: c })) : undefined,
@@ -320,19 +320,29 @@ export async function renderAppsAdmin(root, onChange) {
     const type = h('select', Object.entries(types).filter(([k]) => !(target.noPassword && k === 'password')).map(([k, l]) => h('option', { value: k, selected: f ? f.type === k : k === 'text' }, l)));
     const choices = h('textarea', { value: f && f.options.choices ? f.options.choices.join('\n') : '', placeholder: 'Una opción por línea' });
     const choicesField = h('div.field', h('label', 'Opciones'), choices);
-    const width = h('select', [['half', 'Media fila'], ['third', 'Un tercio'], ['full', 'Fila completa']].map(([k, l]) => h('option', { value: k, selected: f ? f.width === k : k === 'half' }, l)));
+    // Ancho visual: proporción de la fila (se adapta a cada pantalla)
+    const WID = [['xs', 'Muy estrecho', 1 / 6], ['sm', 'Estrecho', 1 / 4], ['md', 'Medio', 1 / 3], ['lg', 'Ancho', 1 / 2], ['xl', 'Muy ancho', 2 / 3], ['full', 'Fila completa', 1]];
+    let widthVal = f ? ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md') : 'md';
+    const width = h('div.width-pick', WID.map(([k, l, frac]) => h('button', { type: 'button', class: k === widthVal ? 'on' : '', dataset: { w: k },
+      onclick: (e) => { widthVal = k; [...width.children].forEach((b) => b.classList.toggle('on', b.dataset.w === k)); e.preventDefault(); } },
+    h('span.bar', h('i', { style: { width: `${frac * 100}%` } })), l)));
+    const maxLen = h('input', { type: 'number', min: 1, max: 65000, value: f && f.max_length ? f.max_length : '', placeholder: 'Sin límite' });
+    const maxLenField = h('div.field', h('label', 'Máximo de caracteres (opcional)'), maxLen, h('div.help', 'Por ejemplo 4 para un PIN o 9 para un CIF. No deja escribir más.'));
     const help = h('input', { value: f ? f.help || '' : '' });
     const cb = (v) => h('input', { type: 'checkbox', checked: !!v });
     const required = cb(f && f.required), unique = cb(f && f.unique_value), inList = cb(f ? f.show_in_list : true), active = cb(f ? f.active : true);
-    const sync = () => { choicesField.hidden = !['select', 'multiselect'].includes(type.value); };
+    const sync = () => {
+      choicesField.hidden = !['select', 'multiselect'].includes(type.value);
+      maxLenField.hidden = !['text', 'textarea', 'email', 'phone', 'url', 'password'].includes(type.value);
+    };
     type.onchange = sync; sync();
     const m = modal({
       title: f ? `Campo · ${f.label}` : `Nuevo campo en ${target.name}`, size: 'sm',
       content: h('div.stack', h('div.field', h('label', 'Etiqueta *'), label), h('div.field', h('label', 'Clave interna'), key),
-        h('div.field', h('label', 'Tipo'), type), choicesField, h('div.field', h('label', 'Ancho en el formulario'), width), h('div.field', h('label', 'Texto de ayuda'), help),
+        h('div.field', h('label', 'Tipo'), type), choicesField, h('div.field', h('label', 'Ancho en el formulario'), width, h('div.help', 'Proporción de la fila en pantallas anchas; en el móvil se ajusta solo.')), maxLenField, h('div.field', h('label', 'Texto de ayuda'), help),
         h('div.stack', { style: { gap: '8px' } }, h('label.check', required, 'Obligatorio'), h('label.check', unique, 'Valor único (no se permiten duplicados)'), h('label.check', inList, 'Mostrar en el listado por defecto'), f ? h('label.check', active, 'Activo') : null)),
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
-        const body = { label: label.value, type: type.value, width: width.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value };
+        const body = { label: label.value, type: type.value, width: widthVal, max_length: maxLenField.hidden ? '' : maxLen.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value };
         if (f) body.active = active.checked; else if (key.value) body.key = key.value;
         try { if (f) await target.update(f, body); else await target.create(body); toast('Campo guardado', 'ok'); m.close(); reload(); } catch (e) { toastErr(e); }
       } }, 'Guardar')],

@@ -123,7 +123,7 @@ router.post('/entity-fields/:entity', wrap(async (req, res) => {
   while (await get('SELECT id FROM entity_fields WHERE entity = ? AND `key` = ?', entity, key)) key = `${base}_${n++}`;
   d.type = d.type || 'text';
   d.sort = ((await get('SELECT MAX(sort) m FROM entity_fields WHERE entity = ?', entity)).m ?? -1) + 1;
-  if (!d.width) d.width = d.type === 'textarea' ? 'full' : 'half';
+  if (!d.width) d.width = d.type === 'textarea' ? 'full' : 'md';
   const keys = Object.keys(d);
   const id = Number((await run(`INSERT INTO entity_fields (entity, \`key\`, ${keys.map(q).join(',')}) VALUES (?, ?, ${keys.map(() => '?').join(',')})`, entity, key, ...keys.map((k) => d[k]))).lastInsertRowid);
   await audit(req, { entity: 'fields', entityId: id, action: 'create', summary: `Nuevo campo "${d.label}" (${d.type}) en ${ENTITIES[entity]}` });
@@ -347,12 +347,19 @@ router.put('/apps-order', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+const WIDTHS = ['xs', 'sm', 'md', 'lg', 'xl', 'full'];
 function fieldData(b, isNew) {
-  const d = pick(b, ['label', 'type', 'required', 'unique_value', 'show_in_list', 'width', 'help', 'active']);
+  const d = pick(b, ['label', 'type', 'required', 'unique_value', 'show_in_list', 'width', 'help', 'active', 'max_length']);
   if ((isNew || 'label' in d) && !String(d.label || '').trim()) throw httpError(400, 'La etiqueta es obligatoria');
   if ('type' in d && !FIELD_TYPES[d.type]) throw httpError(400, 'Tipo de campo no válido');
   for (const k of ['required', 'unique_value', 'show_in_list', 'active']) if (k in d) d[k] = bool(d[k]);
-  if ('width' in d && !['half', 'full', 'third'].includes(d.width)) d.width = 'half';
+  if ('width' in d) d.width = ({ half: 'md', third: 'sm' })[d.width] || (WIDTHS.includes(d.width) ? d.width : 'md');
+  if ('max_length' in d) {
+    const n = Number(d.max_length);
+    if (d.max_length === '' || d.max_length === null || !n) d.max_length = null;
+    else if (!Number.isInteger(n) || n < 1 || n > 65000) throw httpError(400, 'Máximo de caracteres: número entre 1 y 65000');
+    else d.max_length = n;
+  }
   if ('choices' in b) {
     const choices = (Array.isArray(b.choices) ? b.choices : String(b.choices).split('\n')).map((s) => String(s).trim()).filter(Boolean);
     d.options = JSON.stringify({ choices });
@@ -371,7 +378,7 @@ router.post('/apps/:id/fields', wrap(async (req, res) => {
   while (await get('SELECT id FROM fields WHERE app_id = ? AND `key` = ?', app.id, key)) key = `${base}_${n++}`;
   d.type = d.type || 'text';
   d.sort = ((await get('SELECT MAX(sort) m FROM fields WHERE app_id = ?', app.id)).m ?? -1) + 1;
-  if (!d.width) d.width = d.type === 'textarea' ? 'full' : 'half';
+  if (!d.width) d.width = d.type === 'textarea' ? 'full' : 'md';
   const keys = Object.keys(d);
   const id = Number((await run(`INSERT INTO fields (app_id, \`key\`, ${keys.map(q).join(',')}) VALUES (?, ?, ${keys.map(() => '?').join(',')})`, app.id, key, ...keys.map((k) => d[k]))).lastInsertRowid);
   await audit(req, { entity: 'fields', entityId: id, appId: app.id, action: 'create', summary: `Nuevo campo "${d.label}" (${d.type}) en ${app.name}` });

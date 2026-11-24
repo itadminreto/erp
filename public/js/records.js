@@ -471,7 +471,8 @@ export async function renderApp(root, key, onCountsChanged) {
       const label = h('label', f.label, f.required ? h('span.req', '*') : null);
       const body = f.type === 'checkbox' ? h('label.check', { style: { minHeight: '38px' } }, input, 'Sí')
         : extra ? h('div.input-group', input, extra) : input;
-      return h('div.field', { class: 'w-' + (f.width || 'half'), dataset: { key: f.key } }, label, body, f.help ? h('div.help', f.help) : null);
+      if (f.max_length && ['INPUT', 'TEXTAREA'].includes(input.tagName) && input.type !== 'checkbox') input.maxLength = f.max_length;
+      return h('div.field', { class: 'w-' + ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md'), dataset: { key: f.key } }, label, body, f.help ? h('div.help', f.help) : null);
     }
 
     function collect() {

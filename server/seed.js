@@ -128,7 +128,7 @@ async function seed() {
              VALUES (?,?,?,?,?,?,?,?,?,?)`,
           appId, key, label, type, choices ? JSON.stringify({ choices }) : null,
           rest.required || 0, rest.unique_value || 0, rest.show_in_list ?? 1,
-          rest.width || (type === 'textarea' ? 'full' : 'half'), j);
+          rest.width || (type === 'textarea' ? 'full' : 'md'), j);
       }
     }
 

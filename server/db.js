@@ -118,7 +118,8 @@ const SCHEMA = [
     required TINYINT(1) NOT NULL DEFAULT 0,
     unique_value TINYINT(1) NOT NULL DEFAULT 0,
     show_in_list TINYINT(1) NOT NULL DEFAULT 1,
-    width VARCHAR(10) NOT NULL DEFAULT 'half',
+    width VARCHAR(10) NOT NULL DEFAULT 'md',
+    max_length INT NULL,
     help VARCHAR(500),
     sort INT NOT NULL DEFAULT 0,
     active TINYINT(1) NOT NULL DEFAULT 1,
@@ -216,7 +217,8 @@ const SCHEMA = [
     required TINYINT(1) NOT NULL DEFAULT 0,
     unique_value TINYINT(1) NOT NULL DEFAULT 0,
     show_in_list TINYINT(1) NOT NULL DEFAULT 1,
-    width VARCHAR(10) NOT NULL DEFAULT 'half',
+    width VARCHAR(10) NOT NULL DEFAULT 'md',
+    max_length INT NULL,
     help VARCHAR(500),
     sort INT NOT NULL DEFAULT 0,
     active TINYINT(1) NOT NULL DEFAULT 1,
@@ -255,6 +257,12 @@ async function init() {
   if (!hasCal.length) {
     await pool.query('ALTER TABLE apps ADD COLUMN calendar TINYINT(1) NOT NULL DEFAULT 0');
     await pool.query("UPDATE apps SET calendar = 1 WHERE `key` = 'recados'");
+  }
+  // Anchos de campo: de 3 tamaños (half/third/full) a 6 (xs, sm, md, lg, xl, full) conservando el aspecto.
+  for (const t of ['fields', 'entity_fields']) {
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS max_length INT NULL`);
+    await pool.query(`ALTER TABLE ${t} ALTER COLUMN width SET DEFAULT 'md'`);
+    await pool.query(`UPDATE ${t} SET width = CASE width WHEN 'half' THEN 'md' WHEN 'third' THEN 'sm' ELSE width END WHERE width IN ('half', 'third')`);
   }
   // Campos dinámicos de centros: la cuenta corriente pasa a ser un campo dinámico (una sola vez).
   const done = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_entity_fields_v1'");

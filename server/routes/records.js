@@ -89,6 +89,7 @@ function buildData(req, input, existing, ctx) {
     const v = input[f.key];
     if (f.type === 'password') {
       if (v === MASK) continue; // sin cambios
+      if (v && f.max_length && String(v).length > f.max_length) { errors.push(`${f.label}: máximo ${f.max_length} caracteres`); continue; }
       data[f.key] = v ? encrypt(String(v)) : '';
       continue;
     }

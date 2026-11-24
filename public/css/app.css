@@ -177,16 +177,29 @@ table.data .cb { width: 1%; }
 /* formulario dinámico: 12 columnas; el nº de campos por fila depende del ancho disponible */
 .modal-body { container-type: inline-size; }
 .form-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 18px 20px; }
-.form-grid .w-full { grid-column: span 12; }
-.form-grid .w-half { grid-column: span 6; }
-.form-grid .w-third { grid-column: span 4; }
-@container (min-width: 900px) {              /* ancho: 3 por fila (4 los de un tercio) */
-  .form-grid .w-half { grid-column: span 4; }
-  .form-grid .w-third { grid-column: span 3; }
+.form-grid > .field { grid-column: span 6; }
+/* Anchos (de 12 columnas). Pantalla media (561–899 px de formulario): */
+.form-grid .w-xs { grid-column: span 3; }   /* 4 por fila */
+.form-grid .w-sm { grid-column: span 4; }   /* 3 por fila */
+.form-grid .w-md, .form-grid .w-lg { grid-column: span 6; }
+.form-grid .w-xl, .form-grid .w-full { grid-column: span 12; }
+@container (min-width: 900px) {             /* formulario ancho */
+  .form-grid .w-xs { grid-column: span 2; } /* 1/6 */
+  .form-grid .w-sm { grid-column: span 3; } /* 1/4 */
+  .form-grid .w-md { grid-column: span 4; } /* 1/3 */
+  .form-grid .w-lg { grid-column: span 6; } /* 1/2 */
+  .form-grid .w-xl { grid-column: span 8; } /* 2/3 */
 }
-@container (max-width: 560px) {              /* estrecho / móvil: uno por fila */
-  .form-grid .w-half, .form-grid .w-third { grid-column: span 12; }
+@container (max-width: 560px) {             /* móvil: los muy estrechos van de 2 en 2, el resto uno por fila */
+  .form-grid .w-xs, .form-grid .w-sm { grid-column: span 6; }
+  .form-grid .w-md, .form-grid .w-lg, .form-grid .w-xl { grid-column: span 12; }
 }
+.width-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.width-pick button { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 6px 6px 5px; cursor: pointer; font: inherit; font-size: .78rem; color: var(--muted); display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.width-pick button .bar { height: 6px; border-radius: 3px; background: var(--border); position: relative; }
+.width-pick button .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--muted); }
+.width-pick button.on { border-color: var(--primary); color: var(--primary); background: var(--primary-2); font-weight: 600; }
+.width-pick button.on .bar i { background: var(--primary); }
 .form-grid .field .input-group .btn.icon { min-height: 34px; }
 .form-top { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .form-top .field { flex: 0 1 380px; }
