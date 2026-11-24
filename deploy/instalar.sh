@@ -27,7 +27,14 @@ die()  { printf '\033[1;31m[error] %s\033[0m\n' "$*" >&2; exit 1; }
 rand() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-32}" || true; }
 
 [[ $EUID -eq 0 ]] || die "Ejecuta el script como root: sudo bash deploy/instalar.sh"
-[[ -f "$APP_DIR/server/index.js" ]] || die "No encuentro la aplicación en $APP_DIR"
+if [[ ! -f "$APP_DIR/server/index.js" ]]; then
+  # Ejecutado fuera del proyecto (p. ej. una copia suelta del script): se usa /opt/erp si existe.
+  if [[ -f /opt/erp/server/index.js ]]; then
+    APP_DIR=/opt/erp
+  else
+    die "No encuentro la aplicación. Descomprime o clona el proyecto en /opt/erp y ejecuta: bash /opt/erp/deploy/instalar.sh"
+  fi
+fi
 case "$APP_DIR" in
   /root/*|/home/*) die "Clona el repositorio en /opt/erp (el servicio no tiene acceso a /root ni /home). Ver deploy/LEEME.md" ;;
 esac
