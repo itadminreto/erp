@@ -252,8 +252,9 @@ router.post('/apps', wrap(async (req, res) => {
 router.put('/apps/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM apps WHERE id = ?', Number(req.params.id));
   if (!before) throw httpError(404, 'No encontrada');
-  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort']);
+  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar']);
   if ('active' in d) d.active = bool(d.active);
+  if ('calendar' in d) d.calendar = bool(d.calendar);
   const keys = Object.keys(d);
   if (keys.length) await run(`UPDATE apps SET ${keys.map((k) => q(k) + ' = ?').join(',')} WHERE id = ?`, ...keys.map((k) => d[k]), before.id);
   const changes = diff(pick(before, keys), d);

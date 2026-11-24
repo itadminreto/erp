@@ -89,7 +89,7 @@ const APPS = [
     ],
   },
   {
-    key: 'recados', name: 'Recados', icon: '📋', color: '#8b5cf6', title: 'titulo',
+    key: 'recados', name: 'Recados', icon: '📋', color: '#8b5cf6', title: 'titulo', calendar: 1,
     description: 'Tareas, encargos y recados internos',
     fields: [
       ['titulo', 'Título', 'text', { required: 1, width: 'full' }],
@@ -120,8 +120,8 @@ async function seed() {
     if (!process.env.ADMIN_PASSWORD) console.log(`\n  ➜ Super admin creado: ${email} / ${pass}  (cámbiala tras el primer acceso)\n`);
 
     for (const [i, a] of APPS.entries()) {
-      const appId = Number((await run('INSERT INTO apps (`key`, name, icon, color, description, sort, title_field) VALUES (?,?,?,?,?,?,?)',
-        a.key, a.name, a.icon, a.color, a.description, i, a.title)).lastInsertRowid);
+      const appId = Number((await run('INSERT INTO apps (`key`, name, icon, color, description, sort, title_field, calendar) VALUES (?,?,?,?,?,?,?,?)',
+        a.key, a.name, a.icon, a.color, a.description, i, a.title, a.calendar || 0)).lastInsertRowid);
       for (const [j, [key, label, type, o = {}]] of a.fields.entries()) {
         const { choices, ...rest } = o;
         await run(`INSERT INTO fields (app_id, \`key\`, label, type, options, required, unique_value, show_in_list, width, sort)

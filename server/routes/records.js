@@ -26,6 +26,8 @@ function jv(key, alias = 'r') {
 
 const activeUsers = () => all('SELECT id, name, email, phone FROM users WHERE deleted_at IS NULL ORDER BY name');
 const companyCenters = (companyId) => all('SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL AND active = 1 ORDER BY code, name', companyId);
+/** Centros que el usuario puede ver en esta app (los de sus asignaciones; todos si tiene acceso a toda la empresa). */
+const visibleCenters = async (req) => (await companyCenters(req.companyId)).filter((c) => can(req.grants, 'view', req.user, { center_id: c.id }));
 
 /** Carga la app, sus campos y los permisos del usuario en la empresa activa. */
 router.param('appKey', async (req, res, next, key) => {
@@ -153,12 +155,13 @@ router.get('/:appKey', wrap(async (req, res) => {
   for (const l of await all('SELECT kind, config FROM user_layouts WHERE user_id = ? AND app_id = ?', req.user.id, req.appDef.id)) {
     layouts[l.kind] = JSON.parse(l.config);
   }
-  const centers = (await companyCenters(req.companyId)).map((c) => ({
+  const centers = (await visibleCenters(req)).map((c) => ({
     ...c, can_create: can(req.grants, 'create', req.user, { center_id: c.id }),
   }));
   res.json({
     app: req.appDef, fields: req.fields, perms: summary(req.grants),
     can_create_without_center: can(req.grants, 'create', req.user, { center_id: null }),
+    can_view_without_center: can(req.grants, 'view', req.user, { center_id: null }),
     centers, users: await activeUsers(), layouts,
   });
 }));
@@ -496,7 +499,7 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
   const { token, mapping = [], default_center = null, match_field = '', dry_run = false } = req.body || {};
   const p = pendingImports.get(token);
   if (!p || p.userId !== req.user.id || p.appId !== req.appDef.id || p.companyId !== req.companyId) throw httpError(400, 'La importación ha caducado, vuelve a subir el fichero');
-  const centers = await companyCenters(req.companyId);
+  const centers = await visibleCenters(req);
   const users = await activeUsers();
   const findCenter = (v) => {
     const s = norm(v);

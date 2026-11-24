@@ -234,6 +234,7 @@ export async function renderAppsAdmin(root, onChange) {
       { key: 'name', label: 'Nombre', value: a.name }, { key: 'icon', label: 'Icono (emoji)', value: a.icon }, { key: 'color', label: 'Color', type: 'color', value: a.color },
       { key: 'description', label: 'Descripción', value: a.description },
       { key: 'title_field', label: 'Campo título (identifica cada registro)', type: 'select', value: a.title_field, options: a.fields.filter((f) => f.type !== 'password').map((f) => ({ value: f.key, label: f.label })) },
+      { key: 'calendar', label: 'Vista calendario (necesita algún campo de fecha)', type: 'checkbox', value: !!a.calendar },
       { key: 'active', label: 'Aplicación activa', type: 'checkbox', value: !!a.active }]);
     if (!v) return;
     try { await api(`/admin/apps/${a.id}`, { method: 'PUT', body: v }); toast('Guardado', 'ok'); reload(); } catch (e) { toastErr(e); }

@@ -26,7 +26,7 @@ export async function renderApp(root, key, onCountsChanged) {
   const saveSt = () => { try { sessionStorage.setItem(persistKey, JSON.stringify({ q: st.q, center: st.center, trash: st.trash, sort: st.sort, dir: st.dir, size: st.size, filters: st.filters, view: st.view, calMonth: st.calMonth, calField: st.calField, colorField: st.colorField })); } catch { /* ignorar */ } };
 
   // ----- calendario: campos de fecha y de color disponibles -----
-  const dateFields = meta.fields.filter((f) => ['date', 'datetime'].includes(f.type));
+  const dateFields = meta.app.calendar ? meta.fields.filter((f) => ['date', 'datetime'].includes(f.type)) : [];
   const colorFields = meta.fields.filter((f) => f.type === 'select' && (f.options.choices || []).length);
   if (!dateFields.some((f) => f.key === st.calField)) st.calField = (dateFields.find((f) => /limite|vencim|proxim|fecha/.test(f.key)) || dateFields[0] || {}).key || '';
   if (st.colorField !== '-' && !colorFields.some((f) => f.key === st.colorField)) st.colorField = (colorFields.find((f) => f.key === 'prioridad') || colorFields.find((f) => f.key === 'estado') || colorFields[0] || {}).key || '-';
@@ -47,10 +47,13 @@ export async function renderApp(root, key, onCountsChanged) {
     h('div', h('h1', meta.app.name), h('div.muted.small', meta.app.description || '')));
   const newBtn = P.create ? h('button.btn.primary', { onclick: () => openRecord(null) }, '＋ ', h('span.lbl', 'Nuevo')) : null;
   const searchInp = h('input', { type: 'search', placeholder: 'Buscar…', value: st.q, oninput: debounce((e) => { st.q = e.target.value; st.page = 1; load(); }, 300) });
+  // el filtro guardado solo vale si el centro sigue siendo visible para este usuario
+  if (st.center && st.center !== 'none' && !meta.centers.some((c) => String(c.id) === String(st.center))) st.center = '';
+  if (st.center === 'none' && !meta.can_view_without_center) st.center = '';
   const centerSel = h('select', { style: { width: 'auto', maxWidth: '220px' }, onchange: (e) => { st.center = e.target.value; st.page = 1; load(); } },
     h('option', { value: '' }, 'Todos los centros'),
     meta.centers.map((c) => h('option', { value: c.id, selected: String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)),
-    h('option', { value: 'none', selected: st.center === 'none' }, '(Sin centro)'));
+    meta.can_view_without_center ? h('option', { value: 'none', selected: st.center === 'none' }, '(Sin centro)') : null);
   const trashCb = h('input', { type: 'checkbox', checked: st.trash, onchange: (e) => { st.trash = e.target.checked; st.page = 1; trashLbl.classList.toggle('on', st.trash); load(); } });
   const trashLbl = h('label.check.trash-toggle', { class: st.trash ? 'on' : '', title: 'Mostrar también los registros borrados (en rojo)' }, trashCb, '🗑️ Ver papelera');
 
@@ -629,7 +632,7 @@ export async function renderApp(root, key, onCountsChanged) {
     }
     function step2(p) {
       const sels = p.header.map((hd, i) => h('select', h('option', { value: '' }, '— Ignorar —'), p.targets.map((t) => h('option', { value: t.key, selected: p.mapping[i] === t.key }, t.label))));
-      const defCenter = h('select', h('option', { value: '' }, '— Sin centro —'), meta.centers.filter((c) => c.can_create).map((c) => h('option', { value: c.id, selected: String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
+      const defCenter = h('select', meta.can_create_without_center ? h('option', { value: '' }, '— Sin centro —') : null, meta.centers.filter((c) => c.can_create).map((c) => h('option', { value: c.id, selected: String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
       const matchSel = h('select', h('option', { value: '' }, 'No: crear siempre registros nuevos'), meta.fields.filter((f) => f.type !== 'password').map((f) => h('option', { value: f.key, selected: f.unique_value }, `Sí, si coincide «${f.label}»`)));
       const result = h('div');
       const run = async (dry) => {

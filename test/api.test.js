@@ -245,3 +245,33 @@ test('copia de seguridad y restauración', async () => {
   assert.equal((await admin.call('POST', '/admin/backups-upload', undefined, { form: bad })).status, 400);
   assert.equal((await admin.call('GET', '/admin/backups/..%2F..%2Fetc%2Fpasswd')).status, 400);
 });
+
+test('cada usuario solo ve los centros que tiene asignados', async () => {
+  const ana = client(); await ana.login('ana@test.com', 'anapass123');
+  const m = await ana.call('GET', '/apps/vehiculos');
+  assert.deepEqual(m.body.centers.map((c) => c.id), [ids.c1]);
+  assert.equal(m.body.can_view_without_center, false);
+  const me = await ana.call('GET', '/me');
+  const cs = await ana.call('GET', `/companies/${me.body.company_id}/centers`);
+  assert.deepEqual(cs.body.map((c) => c.id), [ids.c1]);
+  // el super admin ve todos
+  const all = await admin.call('GET', '/apps/vehiculos');
+  assert.ok(all.body.centers.length >= 2 && all.body.can_view_without_center);
+  // importar en un centro no asignado: "no encontrado"
+  const fd = new FormData(); fd.append('file', new Blob(['Matrícula;Centro\nIMP-C2;CC02\n'], { type: 'text/csv' }), 'c.csv');
+  const p = await ana.call('POST', '/apps/vehiculos/import/preview', undefined, { form: fd });
+  if (p.status === 200) {
+    const r = await ana.call('POST', '/apps/vehiculos/import/commit', { token: p.body.token, mapping: p.body.mapping, dry_run: true });
+    assert.match(r.body.errors[0], /no encontrado/);
+  } else assert.equal(p.status, 403); // el rol Editor no importa
+});
+
+test('vista calendario configurable por aplicación (por defecto solo en Recados)', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  assert.deepEqual(apps.filter((a) => a.calendar).map((a) => a.key), ['recados']);
+  const veh = apps.find((a) => a.key === 'vehiculos');
+  await admin.call('PUT', `/admin/apps/${veh.id}`, { calendar: true });
+  assert.equal((await admin.call('GET', '/apps/vehiculos')).body.app.calendar, 1);
+  await admin.call('PUT', `/admin/apps/${veh.id}`, { calendar: false });
+  assert.equal((await admin.call('GET', '/apps/vehiculos')).body.app.calendar, 0);
+});

@@ -106,7 +106,11 @@ app.use('/api/admin', requireSuper, adminRouter);
 app.get('/api/companies/:id/centers', requireAuth, wrap(async (req, res) => {
   const id = Number(req.params.id);
   if (!(await userCompanies(req.user)).some((c) => c.id === id)) throw httpError(403, 'Sin acceso');
-  res.json(await all('SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL ORDER BY code, name', id));
+  // Solo los centros asignados al usuario (todos si es super admin o tiene acceso a toda la empresa)
+  const full = req.user.is_superadmin || await get('SELECT 1 FROM user_assignments WHERE user_id = ? AND company_id = ? AND center_id IS NULL LIMIT 1', req.user.id, id);
+  res.json(await all(`SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL
+    ${full ? '' : 'AND id IN (SELECT center_id FROM user_assignments WHERE user_id = ? AND company_id = ?)'} ORDER BY code, name`,
+  ...(full ? [id] : [id, req.user.id, id])));
 }));
 app.get('/api/companies/:id/logo', requireAuth, wrap(async (req, res) => {
   const id = Number(req.params.id);

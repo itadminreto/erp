@@ -234,6 +234,12 @@ async function init() {
     await pool.query(sql.replace(/\)\s*$/, ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'));
   }
   for (const sql of MIGRATIONS) await pool.query(sql);
+  // Vista calendario por aplicación: al crear la columna se activa solo en Recados.
+  const hasCal = await pool.query(`SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'apps' AND COLUMN_NAME = 'calendar'`, [DB_NAME]);
+  if (!hasCal.length) {
+    await pool.query('ALTER TABLE apps ADD COLUMN calendar TINYINT(1) NOT NULL DEFAULT 0');
+    await pool.query("UPDATE apps SET calendar = 1 WHERE `key` = 'recados'");
+  }
 }
 
 // Cambios de estructura posteriores a la primera versión (idempotentes).
