@@ -102,6 +102,13 @@ async function restoreBackup(buf, { force = false } = {}) {
         const cols = new Set((await all(`SHOW COLUMNS FROM \`${t}\``)).map((c) => c.Field));
         await run(`DELETE FROM \`${t}\``);
         // Inserciones por lotes de hasta ~4 MB (para no superar max_allowed_packet)
+        // Copias anteriores a los campos dinámicos: la cuenta corriente iba en la columna centers.iban
+        if (t === 'centers' && !cols.has('iban')) {
+          for (const r of rows) {
+            if (r.iban) { const x = r.extra ? JSON.parse(r.extra) : {}; x.iban = r.iban; r.extra = JSON.stringify(x); }
+            if (rows.length && !('extra' in r)) r.extra = null;
+          }
+        }
         const keys = rows.length ? Object.keys(rows[0]).filter((k) => cols.has(k)) : [];
         const ph = `(${keys.map(() => '?').join(',')})`;
         const flush = async (batch) => {

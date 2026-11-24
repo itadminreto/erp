@@ -78,22 +78,41 @@ export function confirmDlg(message, { ok = 'Aceptar', danger = false, title = 'C
   });
 }
 
+/**
+ * Formulario en ventana. Tipos: text, textarea, select (options), multiselect (options), checkbox, number, decimal,
+ * date, datetime, email, phone, url, color, iban. Con más de 7 campos se reparte en dos columnas.
+ * Los campos con `section` muestran un título antes. Devuelve los valores o null si se cancela.
+ */
 export function promptDlg(title, fields, { ok = 'Guardar' } = {}) {
   return new Promise((resolve) => {
     let result = null;
     const inputs = {};
-    const content = h('div.stack', fields.map((f) => {
+    const wide = fields.length > 7;
+    const INPUT = { number: { type: 'number', step: '1' }, decimal: { type: 'number', step: 'any' }, datetime: { type: 'datetime-local' },
+      phone: { type: 'tel' }, iban: { type: 'text', placeholder: 'ES00 0000 0000 0000 0000 0000', autocomplete: 'off' } };
+    const items = [];
+    for (const f of fields) {
+      if (f.section) items.push(h('h3.form-section', { style: wide ? { gridColumn: '1 / -1' } : {} }, f.section));
+      const sel = (multi) => h('select', { multiple: multi, size: multi ? Math.min(6, f.options.length || 3) : undefined },
+        f.options.map((o) => h('option', { value: o.value, selected: multi ? (Array.isArray(f.value) && f.value.map(String).includes(String(o.value))) : String(o.value) === String(f.value ?? '') }, o.label)));
       const inp = f.type === 'textarea' ? h('textarea', { value: f.value || '' })
-        : f.type === 'select' ? h('select', f.options.map((o) => h('option', { value: o.value, selected: String(o.value) === String(f.value ?? '') }, o.label)))
+        : f.type === 'select' ? sel(false)
+        : f.type === 'multiselect' ? sel(true)
         : f.type === 'checkbox' ? h('input', { type: 'checkbox', checked: !!f.value })
-        : h('input', { type: f.type || 'text', value: f.value ?? '', placeholder: f.placeholder || '' });
+        : f.type === 'color' ? h('input', { type: 'color', value: f.value || '#64748b' })
+        : h('input', { type: f.type || 'text', ...(INPUT[f.type] || {}), value: f.type === 'iban' && f.value ? String(f.value).replace(/(.{4})/g, '$1 ').trim() : (f.value ?? ''), placeholder: f.placeholder || (INPUT[f.type] || {}).placeholder || '' });
+      inp.dataset.kind = f.type || 'text';
       inputs[f.key] = inp;
-      return f.type === 'checkbox' ? h('label.check', inp, f.label) : h('div.field', h('label', f.label), inp, f.help ? h('div.help', f.help) : null);
-    }));
+      const full = wide && (f.type === 'textarea' || f.full) ? { gridColumn: '1 / -1' } : {};
+      items.push(f.type === 'checkbox' ? h('label.check', { style: { ...full, minHeight: '34px' } }, inp, f.label)
+        : h('div.field', { style: full }, h('label', f.label, f.required ? h('span.req', '*') : null), inp, f.help ? h('div.help', f.help) : null));
+    }
+    const content = wide ? h('div.two-col', { style: { gap: '14px 18px' } }, items) : h('div.stack', items);
+    const read = (i) => (i.type === 'checkbox' ? i.checked : i.multiple ? [...i.selectedOptions].map((o) => o.value) : i.value);
     const m = modal({
-      title, size: 'sm', content,
+      title, size: wide ? '' : 'sm', content,
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
-        h('button.btn.primary', { onclick: () => { result = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.type === 'checkbox' ? i.checked : i.value])); m.close(); } }, ok)],
+        h('button.btn.primary', { onclick: () => { result = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, read(i)])); m.close(); } }, ok)],
       onClose: () => resolve(result),
     });
     m.body.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') m.foot.querySelector('.primary').click(); });

@@ -273,6 +273,7 @@ export async function renderApp(root, key, onCountsChanged) {
       case 'phone': return h('a', { href: 'tel:' + v, onclick: (e) => e.stopPropagation() }, v);
       case 'color': return h('span.chip', h('span', { style: { width: '12px', height: '12px', borderRadius: '3px', background: v, display: 'inline-block' } }), v);
       case 'decimal': return Number(v).toLocaleString('es-ES', { maximumFractionDigits: 2 });
+      case 'iban': return h('span.mono', String(v).replace(/(.{4})/g, '$1 ').trim());
       default: return String(v);
     }
   }
@@ -431,6 +432,7 @@ export async function renderApp(root, key, onCountsChanged) {
         case 'url': input = h('input', { type: 'url', value: v || '', placeholder: 'https://', disabled: dis });
           extra = v ? h('a.btn.icon', { href: v, target: '_blank', rel: 'noopener', title: 'Abrir' }, '↗') : null; break;
         case 'color': input = h('input', { type: 'color', value: v || '#4f46e5', disabled: dis }); break;
+        case 'iban': input = h('input', { type: 'text', value: v ? String(v).replace(/(.{4})/g, '$1 ').trim() : '', placeholder: 'ES00 0000 0000 0000 0000 0000', autocomplete: 'off', disabled: dis }); break;
         case 'checkbox': input = h('input', { type: 'checkbox', checked: !!v, disabled: dis }); break;
         case 'select': input = h('select', { disabled: dis }, h('option', { value: '' }, '—'), (f.options.choices || []).map((c) => h('option', { value: c, selected: c === v }, c)),
           v && !(f.options.choices || []).includes(v) ? h('option', { value: v, selected: true }, v) : null); break;

@@ -276,14 +276,40 @@ test('vista calendario configurable por aplicación (por defecto solo en Recados
   assert.equal((await admin.call('GET', '/apps/vehiculos')).body.app.calendar, 0);
 });
 
-test('centros: cuenta corriente (IBAN) validada', async () => {
-  const ok = await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: 'es91 2100 0418 4502 0005 1332' });
-  assert.equal(ok.status, 200); assert.equal(ok.body.iban, 'ES9121000418450200051332');
-  const bad = await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: 'ES91 2100 0418 4502 0005 1333' });
+test('centros: cuenta corriente (IBAN) como campo dinámico validado', async () => {
+  const fields = (await admin.call('GET', '/admin/entity-fields/centers')).body;
+  assert.ok(fields.some((f) => f.key === 'iban' && f.type === 'iban'), 'la migración crea el campo IBAN');
+  const ok = await admin.call('PUT', `/admin/centers/${ids.c1}`, { extra: { iban: 'es91 2100 0418 4502 0005 1332' } });
+  assert.equal(ok.status, 200); assert.equal(ok.body.extra.iban, 'ES9121000418450200051332');
+  const bad = await admin.call('PUT', `/admin/centers/${ids.c1}`, { extra: { iban: 'ES91 2100 0418 4502 0005 1333' } });
   assert.equal(bad.status, 400); assert.match(bad.body.error, /dígitos de control/);
-  assert.equal((await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: 'ES91 2100' })).status, 400);
-  const clear = await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: '' });
-  assert.equal(clear.body.iban, null);
+  // editar otro dato no borra el IBAN
+  await admin.call('PUT', `/admin/centers/${ids.c1}`, { notes: 'nota' });
+  const list = (await admin.call('GET', '/admin/centers')).body;
+  assert.equal(list.find((c) => c.id === ids.c1).extra.iban, 'ES9121000418450200051332');
   const h = await admin.call('GET', `/admin/audit?entity=centers`);
   assert.ok(h.body.rows.some((r) => r.changes.some((c) => c.field === 'iban')), 'el cambio queda en la auditoría');
+});
+
+test('campos dinámicos de centros y empresas desde super admin', async () => {
+  const f = await admin.call('POST', '/admin/entity-fields/centers', { label: 'Responsable del centro', type: 'text', required: true });
+  assert.equal(f.status, 201); assert.equal(f.body.key, 'responsable_del_centro');
+  const tel = await admin.call('POST', '/admin/entity-fields/companies', { label: 'Banco', type: 'select', choices: 'Santander\nBBVA\nCaixaBank' });
+  assert.equal(tel.status, 201);
+  // obligatorio
+  const miss = await admin.call('PUT', `/admin/centers/${ids.c2}`, { extra: {} });
+  assert.equal(miss.status, 400); assert.match(miss.body.error, /Responsable del centro: obligatorio/);
+  const ok = await admin.call('PUT', `/admin/centers/${ids.c2}`, { extra: { responsable_del_centro: 'Marta' } });
+  assert.equal(ok.body.extra.responsable_del_centro, 'Marta');
+  const c = await admin.call('PUT', `/admin/companies/${ids.company}`, { extra: { banco: 'bbva' } });
+  assert.equal(c.body.extra.banco, 'BBVA');
+  assert.equal((await admin.call('PUT', `/admin/companies/${ids.company}`, { extra: { banco: 'Otro' } })).status, 400);
+  // claves reservadas y contraseñas no permitidas
+  assert.equal((await admin.call('POST', '/admin/entity-fields/centers', { label: 'Clave', type: 'password' })).status, 400);
+  const r = await admin.call('POST', '/admin/entity-fields/centers', { label: 'Name', type: 'text' });
+  assert.notEqual(r.body.key, 'name');
+  assert.equal((await admin.call('GET', '/admin/entity-fields/usuarios')).status, 404);
+  // desactivar el obligatorio para no afectar a otras pruebas
+  await admin.call('PUT', `/admin/entity-fields/centers/${f.body.id}`, { active: false });
+  assert.equal((await admin.call('PUT', `/admin/centers/${ids.c2}`, { name: 'Centro Norte' })).status, 200);
 });

@@ -206,6 +206,22 @@ const SCHEMA = [
     \`key\` VARCHAR(50) PRIMARY KEY,
     value TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS entity_fields (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    entity VARCHAR(20) NOT NULL,            -- centers | companies
+    \`key\` VARCHAR(50) NOT NULL,
+    label VARCHAR(150) NOT NULL,
+    type VARCHAR(20) NOT NULL DEFAULT 'text',
+    options TEXT,
+    required TINYINT(1) NOT NULL DEFAULT 0,
+    unique_value TINYINT(1) NOT NULL DEFAULT 0,
+    show_in_list TINYINT(1) NOT NULL DEFAULT 1,
+    width VARCHAR(10) NOT NULL DEFAULT 'half',
+    help VARCHAR(500),
+    sort INT NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    UNIQUE KEY uq_entity_fields (entity, \`key\`)
+  )`,
   `CREATE TABLE IF NOT EXISTS share_links (
     code VARCHAR(20) PRIMARY KEY,
     record_id INT NOT NULL,
@@ -240,17 +256,30 @@ async function init() {
     await pool.query('ALTER TABLE apps ADD COLUMN calendar TINYINT(1) NOT NULL DEFAULT 0');
     await pool.query("UPDATE apps SET calendar = 1 WHERE `key` = 'recados'");
   }
+  // Campos dinámicos de centros: la cuenta corriente pasa a ser un campo dinámico (una sola vez).
+  const done = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_entity_fields_v1'");
+  if (!done.length) {
+    await pool.query(`INSERT IGNORE INTO entity_fields (entity, \`key\`, label, type, help, sort)
+      VALUES ('centers', 'iban', 'Cuenta corriente (IBAN)', 'iban', 'Se comprueban los dígitos de control', 0)`);
+    const hasIban = await pool.query(`SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'centers' AND COLUMN_NAME = 'iban'`, [DB_NAME]);
+    if (hasIban.length) {
+      await pool.query(`UPDATE centers SET extra = JSON_SET(COALESCE(extra, '{}'), '$.iban', iban) WHERE iban IS NOT NULL AND iban <> ''`);
+      await pool.query('ALTER TABLE centers DROP COLUMN iban');
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_entity_fields_v1', '1')");
+  }
 }
 
 // Cambios de estructura posteriores a la primera versión (idempotentes).
 const MIGRATIONS = [
   'ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo MEDIUMTEXT NULL',
-  'ALTER TABLE centers ADD COLUMN IF NOT EXISTS iban VARCHAR(34) NULL AFTER address',
+  'ALTER TABLE centers ADD COLUMN IF NOT EXISTS extra LONGTEXT NULL',
+  'ALTER TABLE companies ADD COLUMN IF NOT EXISTS extra LONGTEXT NULL',
 ];
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
 const BACKUP_TABLES = ['companies', 'centers', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
-  'records', 'audit_log', 'user_layouts', 'settings', 'share_links'];
+  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields'];
 
 const close = () => pool.end();
 

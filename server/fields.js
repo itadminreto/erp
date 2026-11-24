@@ -6,7 +6,7 @@ const FIELD_TYPES = {
   text: 'Texto', textarea: 'Texto largo', number: 'Número entero', decimal: 'Número decimal',
   date: 'Fecha', datetime: 'Fecha y hora', email: 'Email', phone: 'Teléfono', url: 'URL',
   select: 'Lista desplegable', multiselect: 'Selección múltiple', checkbox: 'Sí / No',
-  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color',
+  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)',
 };
 
 function parseField(f) {
@@ -100,6 +100,7 @@ function normalize(field, raw, ctx = {}) {
       if (!u) throw new Error(`${L}: usuario "${raw}" no encontrado`);
       return u.id;
     }
+    case 'iban': return normIban(raw, L);
     case 'url': {
       let s = String(raw).trim();
       if (!/^[a-z]+:\/\//i.test(s)) s = 'https://' + s;
@@ -109,6 +110,22 @@ function normalize(field, raw, ctx = {}) {
   }
 }
 
+/** Valida un IBAN (longitud por país y dígitos de control ISO 13616). Devuelve el IBAN sin espacios. */
+function normIban(v, label = 'IBAN') {
+  const s = String(v || '').replace(/[\s.-]/g, '').toUpperCase();
+  if (!s) return '';
+  const LEN = { ES: 24, PT: 25, FR: 27, DE: 22, IT: 27, AD: 24, GB: 22, NL: 18, BE: 16, IE: 22, LU: 20, CH: 21, AT: 20 };
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(s) || (LEN[s.slice(0, 2)] && s.length !== LEN[s.slice(0, 2)])) {
+    throw new Error(`${label}: el IBAN no tiene un formato válido (ej. ES91 2100 0418 4502 0005 1332)`);
+  }
+  const num = (s.slice(4) + s.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
+  let rem = 0;
+  for (const d of num) rem = (rem * 10 + Number(d)) % 97;
+  if (rem !== 1) throw new Error(`${label}: los dígitos de control del IBAN no son correctos (revisa el número)`);
+  return s;
+}
+const fmtIban = (s) => String(s || '').replace(/(.{4})/g, '$1 ').trim();
+
 /** Convierte un valor almacenado a texto legible (para exportar). */
 function toText(field, v, usersById = {}) {
   if (v === undefined || v === null || v === '') return '';
@@ -116,8 +133,9 @@ function toText(field, v, usersById = {}) {
     case 'checkbox': return v ? 'Sí' : 'No';
     case 'multiselect': return Array.isArray(v) ? v.join(', ') : String(v);
     case 'user': return usersById[v] ? usersById[v].name : String(v);
+    case 'iban': return fmtIban(v);
     default: return v;
   }
 }
 
-module.exports = { FIELD_TYPES, appFields, parseField, normalize, toText };
+module.exports = { FIELD_TYPES, appFields, parseField, normalize, toText, normIban };

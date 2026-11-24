@@ -1,10 +1,43 @@
 // Panel de super administración: empresas, centros, usuarios, roles/políticas, aplicaciones y campos, ajustes y auditoría.
-import { api, h, clear, toast, toastErr, modal, confirmDlg, promptDlg, fmtDateTime, download, debounce, sortable, PERM_LABELS, ACTION_LABELS } from './core.js';
+import { api, h, clear, toast, toastErr, modal, confirmDlg, promptDlg, fmtDate, fmtDateTime, download, debounce, sortable, PERM_LABELS, ACTION_LABELS } from './core.js';
 
 const head = (title, sub, ...actions) => h('div.page-head', h('div.title', h('div', h('h1', title), sub ? h('div.muted.small', sub) : null)), h('div.btn-group', actions));
 
-/** Tabla CRUD genérica con papelera para entidades simples. */
-async function simpleEntity(root, { title, sub, path, columns, form, newLabel, onChange }) {
+/** Muestra el valor de un campo dinámico como texto. */
+function fmtExtra(f, v, usersById = {}) {
+  if (v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length)) return '';
+  switch (f.type) {
+    case 'checkbox': return v ? 'Sí' : 'No';
+    case 'date': return fmtDate(v);
+    case 'datetime': return fmtDateTime(v);
+    case 'multiselect': return v.join(', ');
+    case 'user': return usersById[v] ? usersById[v].name : `#${v}`;
+    case 'iban': return String(v).replace(/(.{4})/g, '$1 ').trim();
+    case 'decimal': return Number(v).toLocaleString('es-ES', { maximumFractionDigits: 2 });
+    default: return String(v);
+  }
+}
+
+/** Tabla CRUD genérica con papelera para entidades simples. `entity` activa sus campos dinámicos (empresas, centros). */
+async function simpleEntity(root, { title, sub, path, columns, form, newLabel, onChange, entity }) {
+  let extraFields = [], users = [], usersById = {};
+  if (entity) {
+    [extraFields, users] = await Promise.all([api(`/admin/entity-fields/${entity}`), api('/admin/users')]);
+    usersById = Object.fromEntries(users.map((u) => [u.id, u]));
+    // columnas de los campos dinámicos marcados «mostrar en el listado», antes de la columna Estado
+    const pos = columns.findIndex((c) => c.label === 'Estado');
+    const extraCols = extraFields.filter((f) => f.show_in_list).map((f) => ({ label: f.label,
+      render: (r) => { const t = fmtExtra(f, (r.extra || {})[f.key], usersById); return f.type === 'iban' && t ? h('span.mono', t) : t; } }));
+    columns = pos < 0 ? [...columns, ...extraCols] : [...columns.slice(0, pos), ...extraCols, ...columns.slice(pos)];
+  }
+  const X = 'x:'; // prefijo interno de los campos dinámicos en el formulario
+  const extraForm = () => extraFields.map((f, i) => ({
+    key: X + f.key, label: f.label, type: f.type === 'user' ? 'select' : f.type, help: f.help || '', required: f.required,
+    section: i === 0 ? 'Datos adicionales' : undefined, full: f.width === 'full',
+    options: f.type === 'user' ? [{ value: '', label: '—' }, ...users.map((u) => ({ value: u.id, label: u.name }))]
+      : f.type === 'select' ? [{ value: '', label: '—' }, ...(f.options.choices || []).map((c) => ({ value: c, label: c }))]
+      : f.type === 'multiselect' ? (f.options.choices || []).map((c) => ({ value: c, label: c })) : undefined,
+  }));
   let trash = false;
   const tableBox = h('div.card');
   const trashCb = h('input', { type: 'checkbox', onchange: (e) => { trash = e.target.checked; trashLbl.classList.toggle('on', trash); load(); } });
@@ -30,12 +63,16 @@ async function simpleEntity(root, { title, sub, path, columns, form, newLabel, o
       : h('div.empty', h('div.big', '📭'), h('p', 'Sin registros')));
   }
   async function edit(r, prev = null) {
-    const fields = typeof form === 'function' ? await form(r) : form;
-    const v = await promptDlg(r ? `Editar · ${r.name}` : newLabel, fields.map((f) => ({ ...f, value: prev ? prev[f.key] : r ? r[f.key] : f.value })));
+    const fields = [...(typeof form === 'function' ? await form(r) : form), ...extraForm()];
+    const current = (f) => (f.key.startsWith(X) ? (r && r.extra ? r.extra[f.key.slice(X.length)] : undefined) : r ? r[f.key] : undefined);
+    const v = await promptDlg(r ? `Editar · ${r.name}` : newLabel, fields.map((f) => ({ ...f, value: prev ? prev[f.key] : r ? current(f) : f.value })));
     if (!v) return;
+    const body = { extra: {} };
+    for (const [k, val] of Object.entries(v)) { if (k.startsWith(X)) body.extra[k.slice(X.length)] = val; else body[k] = val; }
+    if (!entity) delete body.extra;
     try {
-      if (r) await api(`/admin/${path}/${r.id}`, { method: 'PUT', body: v });
-      else await api(`/admin/${path}`, { method: 'POST', body: v });
+      if (r) await api(`/admin/${path}/${r.id}`, { method: 'PUT', body });
+      else await api(`/admin/${path}`, { method: 'POST', body });
       toast('Guardado', 'ok'); load(); onChange && onChange();
     } catch (e) { toastErr(e); edit(r, v); } // si falla, se reabre con lo escrito para corregirlo
   }
@@ -60,7 +97,7 @@ function logoCell(r, after) {
 
 export function renderCompanies(root, onChange) {
   return simpleEntity(root, {
-    title: 'Empresas', sub: 'Entorno multi-empresa: cada empresa tiene sus centros, usuarios y datos separados', path: 'companies', newLabel: 'Nueva empresa', onChange,
+    title: 'Empresas', sub: 'Entorno multi-empresa: cada empresa tiene sus centros, usuarios y datos separados', path: 'companies', newLabel: 'Nueva empresa', onChange, entity: 'companies',
     columns: [{ label: 'Logo', render: (r, reload) => logoCell(r, async () => { await reload(); onChange && onChange(); }) },
       { key: 'name', label: 'Nombre' }, { key: 'cif', label: 'CIF' }, { key: 'email', label: 'Email' }, { key: 'phone', label: 'Teléfono' }, { label: 'Estado', render: (r) => h('span.chip', { class: r.active ? 'ok' : '' }, r.active ? 'Activa' : 'Inactiva') }],
     form: [{ key: 'name', label: 'Nombre *' }, { key: 'cif', label: 'CIF / NIF' }, { key: 'address', label: 'Dirección' }, { key: 'email', label: 'Email', type: 'email' }, { key: 'phone', label: 'Teléfono' }, { key: 'notes', label: 'Notas', type: 'textarea' }, { key: 'active', label: 'Activa', type: 'checkbox', value: true }],
@@ -70,17 +107,15 @@ export function renderCompanies(root, onChange) {
 export async function renderCenters(root) {
   const companies = await api('/admin/companies');
   return simpleEntity(root, {
-    title: 'Centros de trabajo / coste', sub: 'Los registros de cada aplicación se asignan a un centro y los permisos pueden limitarse por centro', path: 'centers', newLabel: 'Nuevo centro',
+    title: 'Centros de trabajo / coste', sub: 'Los registros de cada aplicación se asignan a un centro y los permisos pueden limitarse por centro', path: 'centers', newLabel: 'Nuevo centro', entity: 'centers',
     columns: [{ key: 'company_name', label: 'Empresa' }, { key: 'code', label: 'Código' }, { key: 'name', label: 'Nombre' },
       { label: 'Tipo', render: (r) => h('span.chip', { trabajo: 'Centro de trabajo', coste: 'Centro de coste', ambos: 'Trabajo y coste' }[r.kind] || r.kind) },
-      { label: 'Cuenta corriente', render: (r) => (r.iban ? h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '.85rem' } }, r.iban.replace(/(.{4})/g, '$1 ').trim()) : '') },
       { label: 'Estado', render: (r) => h('span.chip', { class: r.active ? 'ok' : '' }, r.active ? 'Activo' : 'Inactivo') }],
     form: [
       { key: 'company_id', label: 'Empresa *', type: 'select', options: companies.map((c) => ({ value: c.id, label: c.name })), value: companies[0] && companies[0].id },
       { key: 'code', label: 'Código', placeholder: 'CC01' }, { key: 'name', label: 'Nombre *' },
       { key: 'kind', label: 'Tipo', type: 'select', value: 'trabajo', options: [{ value: 'trabajo', label: 'Centro de trabajo' }, { value: 'coste', label: 'Centro de coste' }, { value: 'ambos', label: 'Trabajo y coste' }] },
       { key: 'address', label: 'Dirección' },
-      { key: 'iban', label: 'Cuenta corriente (IBAN)', placeholder: 'ES00 0000 0000 0000 0000 0000', help: 'Se comprueban los dígitos de control. Puedes escribirlo con o sin espacios.' },
       { key: 'notes', label: 'Notas', type: 'textarea' }, { key: 'active', label: 'Activo', type: 'checkbox', value: true }],
   });
 }
@@ -197,32 +232,69 @@ export async function renderRoles(root) {
 export async function renderAppsAdmin(root, onChange) {
   const types = await api('/admin/field-types');
   let apps = await api('/admin/apps');
-  let current = apps[0] ? apps[0].id : null;
+  const ENT = { companies: { name: 'Empresas', icon: '🏢', desc: 'Datos adicionales de cada empresa' }, centers: { name: 'Centros', icon: '📍', desc: 'Datos adicionales de cada centro de trabajo / coste' } };
+  const entFields = {};
+  const loadEnt = async () => { for (const e of Object.keys(ENT)) entFields[e] = await api(`/admin/entity-fields/${e}?all=1`); };
+  await loadEnt();
+  let current = apps[0] ? apps[0].id : null;   // id de app o 'e:centers' / 'e:companies'
   const side = h('div.sort-list');
+  const sideEnt = h('div.sort-list');
   const detail = h('div');
   clear(root, head('Aplicaciones y campos', 'Añade aplicaciones y campos sin programar. Arrastra para cambiar el orden por defecto.',
     h('button.btn.primary', { onclick: newApp }, '＋ Nueva aplicación')),
-  h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: '16px' }, class: 'apps-admin' }, h('div', side), detail));
+  h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: '16px' }, class: 'apps-admin' }, h('div', side, sideEnt), detail));
   if (window.matchMedia('(max-width: 760px)').matches) root.querySelector('.apps-admin').style.gridTemplateColumns = '1fr';
 
-  async function reload() { apps = await api('/admin/apps'); draw(); onChange && onChange(); }
+  async function reload() { apps = await api('/admin/apps'); await loadEnt(); draw(); onChange && onChange(); }
+  const fieldRow = (f, onEdit, extra = null) => h('div.sort-item', { class: f.active ? '' : 'inactive', dataset: { id: f.id } },
+    h('span.grip', '⋮⋮'),
+    h('div.grow', h('div', h('strong', f.label), f.required ? h('span.req', { style: { color: 'var(--danger)' } }, ' *') : null, extra),
+      h('div.muted.small', `${types[f.type] || f.type} · clave: ${f.key}${f.unique_value ? ' · único' : ''}${f.show_in_list ? ' · en listado' : ''}${f.active ? '' : ' · DESACTIVADO'}`)),
+    h('button.btn.sm', { onclick: onEdit }, 'Editar'));
+  const entItem = (e) => h('div.sort-item', { style: current === 'e:' + e ? { borderColor: 'var(--primary)', background: 'var(--primary-2)' } : { cursor: 'pointer' }, onclick: () => { current = 'e:' + e; draw(); } },
+    h('span', ENT[e].icon), h('span.grow', ENT[e].name), h('span.muted.small', `${entFields[e].filter((f) => f.active).length}`));
+  function drawEntity(e) {
+    const target = { name: ENT[e].name, noPassword: true,
+      create: (body) => api(`/admin/entity-fields/${e}`, { method: 'POST', body }),
+      update: (f, body) => api(`/admin/entity-fields/${e}/${f.id}`, { method: 'PUT', body }) };
+    const list = h('div.sort-list', entFields[e].map((f) => fieldRow(f, () => editField(target, f))));
+    sortable(list, { handle: '.grip', onEnd: () => api(`/admin/entity-fields/${e}/order`, { method: 'PUT', body: { ids: [...list.children].map((x) => x.dataset.id) } }).then(reload).catch(toastErr) });
+    clear(detail, h('div.card.card-pad.stack',
+      h('div.row', h('div.app-ico', { style: { width: '42px', height: '42px', borderRadius: '11px', display: 'grid', placeItems: 'center', fontSize: '22px', background: 'var(--primary-2)' } }, ENT[e].icon),
+        h('div', { style: { flex: 1 } }, h('h2', `${ENT[e].name} · datos adicionales`), h('div.muted.small', ENT[e].desc))),
+      h('p.muted.small', 'Los datos básicos (nombre, código, dirección…) son fijos. Aquí añades los que necesites: aparecerán en el formulario bajo «Datos adicionales» y, si lo marcas, como columna del listado.'),
+      h('div.row', h('h3', { style: { flex: 1 } }, 'Campos'), h('button.btn.primary.sm', { onclick: () => editField(target, null) }, '＋ Añadir campo')),
+      entFields[e].length ? list : h('p.muted', 'Todavía no hay campos adicionales.'),
+      h('p.muted.small', 'Los campos no se borran: se desactivan para conservar los datos históricos.')));
+  }
   function draw() {
+    if (String(current).startsWith('e:')) {
+      drawSide();
+      return drawEntity(String(current).slice(2));
+    }
+    drawSide();
+    drawApp();
+  }
+  function drawSide() {
     clear(side, apps.map((a) => h('div.sort-item', { class: (a.active ? '' : 'inactive ') + (a.id === current ? 'active' : ''), dataset: { id: a.id }, style: a.id === current ? { borderColor: 'var(--primary)', background: 'var(--primary-2)' } : { cursor: 'pointer' }, onclick: () => { current = a.id; draw(); } },
       h('span.grip', '⋮⋮'), h('span', a.icon), h('span.grow', a.name), h('span.muted.small', `${a.fields.filter((f) => f.active).length}`))));
     sortable(side, { handle: '.grip', onEnd: () => api('/admin/apps-order', { method: 'PUT', body: { ids: [...side.children].map((e) => e.dataset.id) } }).then(reload) });
+    clear(sideEnt, h('div.muted.small', { style: { margin: '14px 4px 6px', textTransform: 'uppercase', letterSpacing: '.05em' } }, 'Datos maestros'), Object.keys(ENT).map(entItem));
+  }
+  function drawApp() {
     const a = apps.find((x) => x.id === current);
     if (!a) return clear(detail, h('div.empty', 'Selecciona una aplicación'));
-    const fieldsList = h('div.sort-list', a.fields.map((f) => h('div.sort-item', { class: f.active ? '' : 'inactive', dataset: { id: f.id } },
-      h('span.grip', '⋮⋮'),
-      h('div.grow', h('div', h('strong', f.label), f.required ? h('span.req', { style: { color: 'var(--danger)' } }, ' *') : null, a.title_field === f.key ? h('span.chip', { style: { marginLeft: '6px' } }, 'Título') : null),
-        h('div.muted.small', `${types[f.type] || f.type} · clave: ${f.key}${f.unique_value ? ' · único' : ''}${f.show_in_list ? ' · en listado' : ''}${f.active ? '' : ' · DESACTIVADO'}`)),
-      h('button.btn.sm', { onclick: () => editField(a, f) }, 'Editar'))));
+    const target = { name: a.name,
+      create: (body) => api(`/admin/apps/${a.id}/fields`, { method: 'POST', body }),
+      update: (f, body) => api(`/admin/fields/${f.id}`, { method: 'PUT', body }) };
+    const fieldsList = h('div.sort-list', a.fields.map((f) => fieldRow(f, () => editField(target, f),
+      a.title_field === f.key ? h('span.chip', { style: { marginLeft: '6px' } }, 'Título') : null)));
     sortable(fieldsList, { handle: '.grip', onEnd: () => api(`/admin/apps/${a.id}/fields-order`, { method: 'PUT', body: { ids: [...fieldsList.children].map((e) => e.dataset.id) } }).then(reload).catch(toastErr) });
     clear(detail, h('div.card.card-pad.stack',
       h('div.row', h('div.app-ico', { style: { width: '42px', height: '42px', borderRadius: '11px', display: 'grid', placeItems: 'center', fontSize: '22px', background: a.color + '22' } }, a.icon),
         h('div', { style: { flex: 1 } }, h('h2', a.name), h('div.muted.small', `clave: ${a.key} · ${a.description || ''}`)),
         h('button.btn', { onclick: () => editApp(a) }, '⚙ Propiedades')),
-      h('div.row', h('h3', { style: { flex: 1 } }, 'Campos'), h('button.btn.primary.sm', { onclick: () => editField(a, null) }, '＋ Añadir campo')),
+      h('div.row', h('h3', { style: { flex: 1 } }, 'Campos'), h('button.btn.primary.sm', { onclick: () => editField(target, null) }, '＋ Añadir campo')),
       fieldsList,
       h('p.muted.small', 'Los campos no se borran: se desactivan para conservar los datos históricos. La clave interna no cambia aunque modifiques la etiqueta.')));
   }
@@ -242,10 +314,10 @@ export async function renderAppsAdmin(root, onChange) {
     if (!v) return;
     try { await api(`/admin/apps/${a.id}`, { method: 'PUT', body: v }); toast('Guardado', 'ok'); reload(); } catch (e) { toastErr(e); }
   }
-  function editField(a, f) {
+  function editField(target, f) {
     const label = h('input', { value: f ? f.label : '' });
     const key = h('input', { value: f ? f.key : '', disabled: !!f, placeholder: 'automática' });
-    const type = h('select', Object.entries(types).map(([k, l]) => h('option', { value: k, selected: f ? f.type === k : k === 'text' }, l)));
+    const type = h('select', Object.entries(types).filter(([k]) => !(target.noPassword && k === 'password')).map(([k, l]) => h('option', { value: k, selected: f ? f.type === k : k === 'text' }, l)));
     const choices = h('textarea', { value: f && f.options.choices ? f.options.choices.join('\n') : '', placeholder: 'Una opción por línea' });
     const choicesField = h('div.field', h('label', 'Opciones'), choices);
     const width = h('select', [['half', 'Media fila'], ['third', 'Un tercio'], ['full', 'Fila completa']].map(([k, l]) => h('option', { value: k, selected: f ? f.width === k : k === 'half' }, l)));
@@ -255,14 +327,14 @@ export async function renderAppsAdmin(root, onChange) {
     const sync = () => { choicesField.hidden = !['select', 'multiselect'].includes(type.value); };
     type.onchange = sync; sync();
     const m = modal({
-      title: f ? `Campo · ${f.label}` : `Nuevo campo en ${a.name}`, size: 'sm',
+      title: f ? `Campo · ${f.label}` : `Nuevo campo en ${target.name}`, size: 'sm',
       content: h('div.stack', h('div.field', h('label', 'Etiqueta *'), label), h('div.field', h('label', 'Clave interna'), key),
         h('div.field', h('label', 'Tipo'), type), choicesField, h('div.field', h('label', 'Ancho en el formulario'), width), h('div.field', h('label', 'Texto de ayuda'), help),
         h('div.stack', { style: { gap: '8px' } }, h('label.check', required, 'Obligatorio'), h('label.check', unique, 'Valor único (no se permiten duplicados)'), h('label.check', inList, 'Mostrar en el listado por defecto'), f ? h('label.check', active, 'Activo') : null)),
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
         const body = { label: label.value, type: type.value, width: width.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value };
         if (f) body.active = active.checked; else if (key.value) body.key = key.value;
-        try { if (f) await api(`/admin/fields/${f.id}`, { method: 'PUT', body }); else await api(`/admin/apps/${a.id}/fields`, { method: 'POST', body }); toast('Campo guardado', 'ok'); m.close(); reload(); } catch (e) { toastErr(e); }
+        try { if (f) await target.update(f, body); else await target.create(body); toast('Campo guardado', 'ok'); m.close(); reload(); } catch (e) { toastErr(e); }
       } }, 'Guardar')],
     });
   }

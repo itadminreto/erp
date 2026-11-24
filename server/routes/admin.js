@@ -3,7 +3,7 @@
 const express = require('express');
 const { all, get, run, tx } = require('../db');
 const { PERMS, hash } = require('../auth');
-const { FIELD_TYPES, appFields } = require('../fields');
+const { FIELD_TYPES, appFields, parseField, normalize } = require('../fields');
 const { encrypt } = require('../crypto');
 const { audit, diff } = require('../audit');
 const { sendMail } = require('../mailer');
@@ -25,30 +25,73 @@ const q = (c) => '`' + c + '`'; // escapa nombres de columna (p. ej. `key`)
 /** CRUD genérico con borrado lógico y trazabilidad para tablas simples. */
 const strip = (r) => { if (r) delete r.logo; return r; };
 
+// ---------- campos dinámicos de empresas y centros ----------
+const ENTITIES = { companies: 'Empresas', centers: 'Centros' };
+// Claves reservadas (columnas fijas) que no pueden usarse como campo dinámico
+const RESERVED = ['id', 'name', 'cif', 'address', 'email', 'phone', 'notes', 'active', 'code', 'kind', 'company_id', 'logo', 'extra', 'created_at', 'deleted_at'];
+const entityFields = async (entity, inactive = false) =>
+  (await all(`SELECT * FROM entity_fields WHERE entity = ? ${inactive ? '' : 'AND active = 1'} ORDER BY sort, id`, entity)).map(parseField);
+const parseExtra = (r) => { if (r) { try { r.extra = r.extra ? JSON.parse(r.extra) : {}; } catch { r.extra = {}; } } return r; };
+
+/** Valida los datos extra (campos dinámicos) y devuelve el JSON resultante mezclado con el anterior. */
+async function buildExtra(entity, table, input, before) {
+  const fields = await entityFields(entity);
+  const prev = before ? parseExtra({ extra: before.extra }).extra : {};
+  const out = { ...prev };
+  const errors = [];
+  const users = await all('SELECT id, name, email FROM users WHERE deleted_at IS NULL');
+  for (const f of fields) {
+    if (!input || !(f.key in input)) continue;
+    try { out[f.key] = normalize(f, input[f.key], { users }); } catch (e) { errors.push(e.message); }
+  }
+  for (const f of fields) {
+    const v = out[f.key];
+    if (f.required && (v === undefined || v === '' || v === null || (Array.isArray(v) && !v.length))) errors.push(`${f.label}: obligatorio`);
+    if (f.unique_value && v !== '' && v !== undefined && v !== null) {
+      const dup = await get(`SELECT id FROM ${table} WHERE deleted_at IS NULL AND id <> ? AND LOWER(JSON_VALUE(extra, '$.${f.key}')) = LOWER(?) LIMIT 1`,
+        before ? before.id : 0, String(v));
+      if (dup) errors.push(`${f.label}: ya existe otro registro con "${v}"`);
+    }
+  }
+  if (errors.length) throw httpError(400, errors.join(' · '));
+  return out;
+}
+
+/** CRUD genérico con borrado lógico, campos dinámicos (`extra`) y trazabilidad para tablas simples. */
 function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSql, labelOf = (r) => r.name } = {}) {
+  const dynamic = !!ENTITIES[entity];
+  const reload = async (id) => strip(parseExtra(await get(`SELECT * FROM ${table} WHERE id = ?`, id)));
   router.get(`/${entity}`, wrap(async (req, res) => {
     const trash = req.query.trash === '1';
     const sql = listSql || `SELECT * FROM ${table}`;
-    res.json(await all(`${sql} ${sql.includes('WHERE') ? 'AND' : 'WHERE'} ${trash ? '1' : `${table}.deleted_at IS NULL`} ORDER BY ${orderBy}`));
+    const rows = await all(`${sql} ${sql.includes('WHERE') ? 'AND' : 'WHERE'} ${trash ? '1' : `${table}.deleted_at IS NULL`} ORDER BY ${orderBy}`);
+    res.json(dynamic ? rows.map(parseExtra) : rows);
   }));
   router.post(`/${entity}`, wrap(async (req, res) => {
     const data = pick(req.body, cols);
     validate(data, null);
+    if (dynamic) data.extra = JSON.stringify(await buildExtra(entity, table, req.body.extra || {}, null));
     const keys = Object.keys(data);
     const id = Number((await run(`INSERT INTO ${table} (${keys.map(q).join(',')}) VALUES (${keys.map(() => '?').join(',')})`, ...keys.map((k) => data[k]))).lastInsertRowid);
-    await audit(req, { entity, entityId: id, action: 'create', summary: `Alta: ${labelOf(data)}`, changes: diff({}, data) });
-    res.status(201).json(strip(await get(`SELECT * FROM ${table} WHERE id = ?`, id)));
+    const shown = { ...data }; if (dynamic) { delete shown.extra; Object.assign(shown, JSON.parse(data.extra)); }
+    await audit(req, { entity, entityId: id, action: 'create', summary: `Alta: ${labelOf(data)}`, changes: diff({}, shown) });
+    res.status(201).json(await reload(id));
   }));
   router.put(`/${entity}/:id`, wrap(async (req, res) => {
     const before = await get(`SELECT * FROM ${table} WHERE id = ?`, Number(req.params.id));
     if (!before) throw httpError(404, 'No encontrado');
     const data = pick(req.body, cols);
     validate(data, before);
+    let changes = diff(pick(before, Object.keys(data)), data);
+    if (dynamic && req.body.extra && typeof req.body.extra === 'object') {
+      const extra = await buildExtra(entity, table, req.body.extra, before);
+      changes = changes.concat(diff(parseExtra({ extra: before.extra }).extra, extra));
+      data.extra = JSON.stringify(extra);
+    }
     const keys = Object.keys(data);
     if (keys.length) await run(`UPDATE ${table} SET ${keys.map((k) => `${q(k)} = ?`).join(',')} WHERE id = ?`, ...keys.map((k) => data[k]), before.id);
-    const changes = diff(pick(before, keys), data);
     if (changes.length) await audit(req, { entity, entityId: before.id, action: 'update', summary: `Modificación: ${labelOf({ ...before, ...data })}`, changes });
-    res.json(strip(await get(`SELECT * FROM ${table} WHERE id = ?`, before.id)));
+    res.json(await reload(before.id));
   }));
   router.delete(`/${entity}/:id`, wrap(async (req, res) => {
     const r = await get(`SELECT * FROM ${table} WHERE id = ?`, Number(req.params.id));
@@ -66,28 +109,51 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
   }));
 }
 
+// Definición de los campos dinámicos de empresas y centros (mismo editor que en las aplicaciones)
+const checkEntity = (e) => { if (!ENTITIES[e]) throw httpError(404, 'Entidad no válida'); return e; };
+router.get('/entity-fields/:entity', wrap(async (req, res) => res.json(await entityFields(checkEntity(req.params.entity), req.query.all === '1'))));
+router.post('/entity-fields/:entity', wrap(async (req, res) => {
+  const entity = checkEntity(req.params.entity);
+  const d = fieldData(req.body || {}, true);
+  if (d.type === 'password') throw httpError(400, 'Las contraseñas solo pueden usarse en las aplicaciones');
+  let key = String(req.body.key || slug(d.label)).trim().toLowerCase();
+  if (!KEY_RE.test(key)) throw httpError(400, 'Clave de campo no válida');
+  if (RESERVED.includes(key)) key = `${key}_2`;
+  let n = 2; const base = key;
+  while (await get('SELECT id FROM entity_fields WHERE entity = ? AND `key` = ?', entity, key)) key = `${base}_${n++}`;
+  d.type = d.type || 'text';
+  d.sort = ((await get('SELECT MAX(sort) m FROM entity_fields WHERE entity = ?', entity)).m ?? -1) + 1;
+  if (!d.width) d.width = d.type === 'textarea' ? 'full' : 'half';
+  const keys = Object.keys(d);
+  const id = Number((await run(`INSERT INTO entity_fields (entity, \`key\`, ${keys.map(q).join(',')}) VALUES (?, ?, ${keys.map(() => '?').join(',')})`, entity, key, ...keys.map((k) => d[k]))).lastInsertRowid);
+  await audit(req, { entity: 'fields', entityId: id, action: 'create', summary: `Nuevo campo "${d.label}" (${d.type}) en ${ENTITIES[entity]}` });
+  res.status(201).json({ id, key });
+}));
+router.put('/entity-fields/:entity/order', wrap(async (req, res) => {
+  const entity = checkEntity(req.params.entity);
+  await tx(async () => { for (const [i, id] of (req.body.ids || []).entries()) await run('UPDATE entity_fields SET sort = ? WHERE id = ? AND entity = ?', i, Number(id), entity); });
+  res.json({ ok: true });
+}));
+router.put('/entity-fields/:entity/:id', wrap(async (req, res) => {
+  const entity = checkEntity(req.params.entity);
+  const before = await get('SELECT * FROM entity_fields WHERE id = ? AND entity = ?', Number(req.params.id), entity);
+  if (!before) throw httpError(404, 'Campo no encontrado');
+  const d = fieldData(req.body || {}, false);
+  if (d.type === 'password') throw httpError(400, 'Las contraseñas solo pueden usarse en las aplicaciones');
+  const keys = Object.keys(d);
+  if (keys.length) await run(`UPDATE entity_fields SET ${keys.map((k) => q(k) + ' = ?').join(',')} WHERE id = ?`, ...keys.map((k) => d[k]), before.id);
+  const changes = diff(pick(before, keys), d);
+  if (changes.length) await audit(req, { entity: 'fields', entityId: before.id, action: 'update', summary: `Campo "${before.label}" de ${ENTITIES[entity]}`, changes });
+  res.json({ ok: true });
+}));
+
 // ---------- empresas y centros ----------
 crud('companies', 'companies', ['name', 'cif', 'address', 'email', 'phone', 'notes', 'active'], {
   orderBy: 'name',
-  listSql: 'SELECT id, name, cif, address, email, phone, notes, active, created_at, deleted_at, (logo IS NOT NULL) has_logo FROM companies',
+  listSql: 'SELECT id, name, cif, address, email, phone, notes, active, created_at, deleted_at, extra, (logo IS NOT NULL) has_logo FROM companies',
   validate: (d, before) => { if ((!before || 'name' in d) && !String(d.name || '').trim()) throw httpError(400, 'El nombre es obligatorio'); if ('active' in d) d.active = bool(d.active); },
 });
-/** Valida un IBAN (longitud y dígitos de control, ISO 13616). Devuelve el IBAN sin espacios o lanza error. */
-function normIban(v) {
-  const s = String(v || '').replace(/[\s-]/g, '').toUpperCase();
-  if (!s) return null;
-  const LEN = { ES: 24, PT: 25, FR: 27, DE: 22, IT: 27, AD: 24, GB: 22, NL: 18, BE: 16 };
-  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(s) || (LEN[s.slice(0, 2)] && s.length !== LEN[s.slice(0, 2)])) {
-    throw httpError(400, 'Cuenta corriente: el IBAN no tiene un formato válido (ej. ES91 2100 0418 4502 0005 1332)');
-  }
-  const num = (s.slice(4) + s.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
-  let rem = 0;
-  for (const d of num) rem = (rem * 10 + Number(d)) % 97;
-  if (rem !== 1) throw httpError(400, 'Cuenta corriente: los dígitos de control del IBAN no son correctos (revisa el número)');
-  return s;
-}
-
-crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'iban', 'notes', 'active'], {
+crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'notes', 'active'], {
   orderBy: 'company_name, centers.code, centers.name',
   listSql: 'SELECT centers.*, companies.name company_name FROM centers JOIN companies ON companies.id = centers.company_id',
   labelOf: (r) => `${r.code ? r.code + ' · ' : ''}${r.name}`,
@@ -97,7 +163,6 @@ crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'ib
     if ('kind' in d && !['trabajo', 'coste', 'ambos'].includes(d.kind)) throw httpError(400, 'Tipo de centro no válido');
     if ('active' in d) d.active = bool(d.active);
     if ('company_id' in d) d.company_id = Number(d.company_id);
-    if ('iban' in d) d.iban = normIban(d.iban);
   },
 });
 
