@@ -506,9 +506,9 @@ export async function renderApp(root, key, onCountsChanged) {
 
     const dataPane = h('div',
       rec && rec.deleted_at ? h('div.deleted-banner', `🗑️ Registro en la papelera desde ${fmtDateTime(rec.deleted_at)}${rec.deleted_by_name ? ' por ' + rec.deleted_by_name : ''}.`) : null,
-      h('div.row', { style: { marginBottom: '14px', alignItems: 'flex-end' } },
-        meta.centers.length ? h('div.field', { style: { flex: '1', minWidth: '220px' } }, h('label', 'Centro de trabajo / coste'), centerSelect) : null,
-        h('div.design-tools', designBtn, resetBtn)),
+      h('div.form-top',
+        meta.centers.length ? h('div.field', h('label', 'Centro de trabajo / coste'), centerSelect) : null,
+        h('div.design-tools.desktop-only', designBtn, resetBtn)),
       grid,
       rec ? h('div.meta-line', h('span', `#${rec.id}`), h('span', `Creado ${fmtDateTime(rec.created_at)}${rec.created_by_name ? ' por ' + rec.created_by_name : ''}`),
         h('span', `Modificado ${fmtDateTime(rec.updated_at)}${rec.updated_by_name ? ' por ' + rec.updated_by_name : ''}`)) : null);
