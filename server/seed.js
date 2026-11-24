@@ -116,7 +116,7 @@ async function seed() {
     const email = process.env.ADMIN_EMAIL || 'admin@erp.local';
     const pass = process.env.ADMIN_PASSWORD || 'admin1234';
     await run(`INSERT INTO users (email, name, password_hash, is_superadmin, must_change_password) VALUES (?,?,?,1,?)`,
-      email, 'Super Administrador', hash(pass), process.env.ADMIN_PASSWORD ? 0 : 1);
+      email, 'Super Administrador', hash(pass), process.env.ADMIN_PASSWORD && process.env.ADMIN_MUST_CHANGE !== '1' ? 0 : 1);
     if (!process.env.ADMIN_PASSWORD) console.log(`\n  ➜ Super admin creado: ${email} / ${pass}  (cámbiala tras el primer acceso)\n`);
 
     for (const [i, a] of APPS.entries()) {

@@ -7,6 +7,10 @@ aplicación que se cree desde el panel de super admin, sin programar).
 
 La aplicación usa **MariaDB** (10.6 o superior) como base de datos y **Node.js ≥ 18**.
 
+### Servidor Ubuntu (recomendado)
+
+Instalador automático con MariaDB, servicio, virtual host Nginx/Apache y copias diarias: ver **[deploy/LEEME.md](deploy/LEEME.md)**.
+
 ### Opción A: Docker (MariaDB + aplicación)
 
 ```bash

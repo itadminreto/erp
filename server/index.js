@@ -12,7 +12,8 @@ const { router: recordsRouter, wrap, httpError, fail } = require('./routes/recor
 const adminRouter = require('./routes/admin');
 
 const app = express();
-app.set('trust proxy', process.env.TRUST_PROXY === '1');
+// Detrás de Nginx/Apache en la misma máquina: solo se confía en la cabecera X-Forwarded-For del proxy local.
+app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 'loopback' : false);
 app.disable('x-powered-by');
 app.use(express.json({ limit: '5mb' }));
 app.use((req, res, next) => {
@@ -33,6 +34,9 @@ app.use('/api', (req, res, next) => {
   if (req.headers['x-requested-with'] !== 'erp') return res.status(403).json({ error: 'Petición no permitida' });
   next();
 });
+
+// Comprobación de estado (para instaladores y monitorización)
+app.get('/api/health', wrap(async (req, res) => { await get('SELECT 1 ok'); res.json({ ok: true }); }));
 
 // ---------- autenticación ----------
 const attempts = new Map();
@@ -116,9 +120,10 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'in
 app.use((err, req, res, _next) => fail(res, err));
 
 const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || undefined; // p. ej. 127.0.0.1 para escuchar solo detrás del proxy
 if (require.main === module) {
   app.ready
-    .then(() => app.listen(PORT, () => console.log(`ERP escuchando en http://localhost:${PORT} (MariaDB: ${db.DB_NAME})`)))
+    .then(() => app.listen(PORT, HOST, () => console.log(`ERP escuchando en http://${HOST || 'localhost'}:${PORT} (MariaDB: ${db.DB_NAME})`)))
     .catch((e) => { console.error('No se pudo conectar a MariaDB:', e.message); process.exit(1); });
 }
 module.exports = app;
