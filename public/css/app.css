@@ -284,3 +284,4 @@ table.data .cb { width: 1%; }
 .logo-thumb { height: 28px; max-width: 90px; object-fit: contain; vertical-align: middle; background: #fff; border-radius: 4px; }
 .form-section { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--primary); margin: 8px 0 -4px; padding-top: 10px; border-top: 1px solid var(--border); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86rem; }
+input.invalid { border-color: var(--danger); outline-color: color-mix(in srgb, var(--danger) 35%, transparent); background: var(--danger-bg); }

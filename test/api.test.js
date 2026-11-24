@@ -335,3 +335,20 @@ test('ancho de campo (6 tamaños) y máximo de caracteres', async () => {
   assert.equal((await admin.call('PUT', `/apps/vehiculos/records/${ids.v1}`, { data: { pin_tarjeta: '123456' } })).status, 400, 'también en contraseñas');
   await admin.call('PUT', `/admin/fields/${pin.id}`, { max_length: '' });
 });
+
+test('tipo de campo Dirección IP: validación, normalización y orden', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const fib = apps.find((a) => a.key === 'fibras');
+  assert.equal(fib.fields.find((f) => f.key === 'ip_fija').type, 'ip', 'IP fija de Fibras usa el tipo IP');
+  const mk = (ip) => admin.call('POST', '/apps/fibras/records', { center_id: ids.c1, data: { ubicacion: 'Sede ' + ip, ip_fija: ip } });
+  const a = await mk('192.168.001.010'); assert.equal(a.status, 201); assert.equal(a.body.data.ip_fija, '192.168.1.10');
+  assert.equal((await mk('10.0.0.0/24')).body.data.ip_fija, '10.0.0.0/24');
+  assert.equal((await mk('192.168.1.2')).status, 201);
+  assert.equal((await mk('FE80::1')).body.data.ip_fija, 'fe80::1');
+  for (const bad of ['192.168.1.256', '192.168.1', '1.2.3.4/33', 'abc', '1.2.3.4.5']) {
+    const r = await mk(bad); assert.equal(r.status, 400, bad); assert.match(r.body.error, /IP no válida/);
+  }
+  const asc = await admin.call('GET', '/apps/fibras/records?sort=ip_fija&dir=asc');
+  const ips = asc.body.rows.map((r) => r.data.ip_fija);
+  assert.deepEqual(ips.slice(0, 3), ['10.0.0.0/24', '192.168.1.2', '192.168.1.10'], 'orden numérico, no alfabético');
+});

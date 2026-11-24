@@ -103,6 +103,7 @@ export function promptDlg(title, fields, { ok = 'Guardar' } = {}) {
         : h('input', { type: f.type || 'text', ...(INPUT[f.type] || {}), value: f.type === 'iban' && f.value ? String(f.value).replace(/(.{4})/g, '$1 ').trim() : (f.value ?? ''), placeholder: f.placeholder || (INPUT[f.type] || {}).placeholder || '' });
       inp.dataset.kind = f.type || 'text';
       if (f.max_length && ['INPUT', 'TEXTAREA'].includes(inp.tagName) && inp.type !== 'checkbox') inp.maxLength = f.max_length;
+      if (f.type === 'ip') ipMask(inp);
       inputs[f.key] = inp;
       const full = wide && (f.type === 'textarea' || f.full) ? { gridColumn: '1 / -1' } : {};
       items.push(f.type === 'checkbox' ? h('label.check', { style: { ...full, minHeight: '34px' } }, inp, f.label)
@@ -166,3 +167,55 @@ export const ACTION_LABELS = {
   reveal: ['Contraseña vista', 'warn'], share: ['Contraseña enviada', 'warn'], share_open: ['Enlace abierto', 'warn'], export: ['Exportación', ''], import: ['Importación', ''],
   backup: ['Copia de seguridad', 'ok'], login: ['Acceso', ''], login_failed: ['Acceso fallido', 'danger'], password: ['Cambio contraseña', 'warn'],
 };
+
+/**
+ * Máscara de dirección IP para un <input>: solo números, puntos y «/» (o modo IPv6 si se escribe «:»),
+ * pone el punto solo tras 3 cifras, impide más de 4 bloques y marca en rojo bloques > 255 o IP incompleta.
+ */
+export function ipMask(input) {
+  input.setAttribute('inputmode', 'decimal');
+  input.setAttribute('autocomplete', 'off');
+  input.setAttribute('spellcheck', 'false');
+  if (!input.placeholder) input.placeholder = '192.168.1.10';
+  const valid = (v) => {
+    if (!v) return true;
+    const [a, m, x] = v.split('/');
+    if (x !== undefined) return false;
+    if (a.includes(':')) return /^[0-9a-f:.]+$/i.test(a) && a.split(':').length >= 3 && (m === undefined || (/^\d{1,3}$/.test(m) && +m <= 128));
+    const p = a.split('.');
+    return p.length === 4 && p.every((o) => /^\d{1,3}$/.test(o) && +o <= 255) && (m === undefined || (/^\d{1,2}$/.test(m) && +m <= 32));
+  };
+  const mark = (final) => {
+    const v = input.value;
+    const [a] = v.split('/');
+    const over = !a.includes(':') && a.split('.').some((o) => +o > 255);
+    const bad = over || (final && !valid(v));
+    input.classList.toggle('invalid', bad);
+    input.title = bad ? 'IP no válida: 4 bloques de 0 a 255 (ej. 192.168.1.10), máscara opcional /0-32' : '';
+  };
+  input.addEventListener('input', (e) => {
+    let v = input.value;
+    // IPv6 (lleva «:» o letras a-f): solo se filtran caracteres no válidos
+    if (/[:a-f]/i.test(v)) { input.value = v.replace(/[^0-9a-fA-F:./]/g, ''); return mark(false); }
+    v = v.replace(/,/g, '.').replace(/[^0-9./]/g, '');
+    let [a, ...rest] = v.split('/');
+    a = a.replace(/\.{2,}/g, '.').replace(/^\./, '');
+    let blocks = a.split('.');
+    if (blocks.length > 4) blocks = blocks.slice(0, 4);
+    blocks = blocks.map((b) => b.replace(/^0+(?=\d)/, '').slice(0, 3)); // sin ceros a la izquierda (01 → 1)
+    a = blocks.join('.');
+    // Punto automático al escribir al final: el bloque está completo si tiene 3 cifras, es un «0»
+    // o cualquier cifra más lo haría pasar de 255 (p. ej. «26»).
+    const atEnd = input.selectionStart === input.value.length;
+    const typing = e.inputType && e.inputType.startsWith('insert') && atEnd;
+    const last = blocks[blocks.length - 1];
+    const full = last.length === 3 || last === '0' || (last.length === 2 && Number(last) > 25);
+    if (typing && blocks.length < 4 && full && !rest.length && !a.endsWith('.')) a += '.';
+    const mask = rest.length ? '/' + rest.join('').replace(/\D/g, '').slice(0, 2) : '';
+    input.value = a + mask;
+    mark(false);
+  });
+  input.addEventListener('blur', () => { input.value = input.value.replace(/\.$/, ''); mark(true); });
+  mark(false);
+  return input;
+}

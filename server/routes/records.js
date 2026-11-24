@@ -232,7 +232,11 @@ function listQuery(req, q) {
     const f = req.fields.find((x) => x.key === q.sort && x.type !== 'password');
     if (['id', 'created_at', 'updated_at', 'deleted_at'].includes(q.sort)) order = `r.${q.sort} ${dir}`;
     else if (q.sort === 'center') order = `c.code ${dir}, c.name ${dir}`;
-    else if (f) order = ['number', 'decimal'].includes(f.type) ? `CAST(${jv(f.key)} AS DECIMAL(20,6)) ${dir}` : `${jv(f.key)} ${dir}`;
+    else if (f) {
+      order = ['number', 'decimal'].includes(f.type) ? `CAST(${jv(f.key)} AS DECIMAL(20,6)) ${dir}`
+        : f.type === 'ip' ? `LENGTH(INET6_ATON(SUBSTRING_INDEX(${jv(f.key)}, '/', 1))) ${dir}, INET6_ATON(SUBSTRING_INDEX(${jv(f.key)}, '/', 1)) ${dir}`
+        : `${jv(f.key)} ${dir}`;
+    }
   }
   return { where: where.join(' AND '), params, order };
 }

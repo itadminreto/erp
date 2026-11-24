@@ -40,7 +40,7 @@ const APPS = [
       ['operador', 'Operador', 'select', { choices: ['Movistar', 'Vodafone', 'Orange', 'Digi', 'MásMóvil', 'Otro'] }],
       ['num_contrato', 'Nº contrato', 'text'],
       ['velocidad_mb', 'Velocidad (Mb)', 'number'],
-      ['ip_fija', 'IP fija', 'text'],
+      ['ip_fija', 'IP fija', 'ip', { width: 'sm' }],
       ['router_usuario', 'Usuario router', 'text', { show_in_list: 0 }],
       ['router_password', 'Contraseña router', 'password', { show_in_list: 0 }],
       ['wifi_ssid', 'WiFi SSID', 'text'],

@@ -6,7 +6,7 @@ const FIELD_TYPES = {
   text: 'Texto', textarea: 'Texto largo', number: 'Número entero', decimal: 'Número decimal',
   date: 'Fecha', datetime: 'Fecha y hora', email: 'Email', phone: 'Teléfono', url: 'URL',
   select: 'Lista desplegable', multiselect: 'Selección múltiple', checkbox: 'Sí / No',
-  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)',
+  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)', ip: 'Dirección IP',
 };
 
 function parseField(f) {
@@ -104,6 +104,7 @@ function normalize(field, raw, ctx = {}) {
       return u.id;
     }
     case 'iban': return normIban(raw, L);
+    case 'ip': return normIp(raw, L);
     case 'url': {
       let s = String(raw).trim();
       if (!/^[a-z]+:\/\//i.test(s)) s = 'https://' + s;
@@ -127,6 +128,26 @@ function normIban(v, label = 'IBAN') {
   if (rem !== 1) throw new Error(`${label}: los dígitos de control del IBAN no son correctos (revisa el número)`);
   return s;
 }
+/** Valida una IP v4 o v6, con máscara CIDR opcional (/24). Quita ceros a la izquierda: 192.168.001.010 → 192.168.1.10 */
+function normIp(v, label = 'IP') {
+  const s = String(v || '').trim().replace(/\s+/g, '');
+  if (!s) return '';
+  const err = () => new Error(`${label}: dirección IP no válida (ej. 192.168.1.10 o 10.0.0.0/24)`);
+  const [addr, mask, extra] = s.split('/');
+  if (extra !== undefined) throw err();
+  const net = require('net');
+  let out;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(addr)) {
+    const parts = addr.split('.').map(Number);
+    if (parts.some((n) => n > 255)) throw err();
+    out = parts.join('.');
+    if (mask !== undefined && !(/^\d{1,2}$/.test(mask) && Number(mask) <= 32)) throw err();
+  } else if (net.isIPv6(addr)) {
+    out = addr.toLowerCase();
+    if (mask !== undefined && !(/^\d{1,3}$/.test(mask) && Number(mask) <= 128)) throw err();
+  } else throw err();
+  return mask !== undefined ? `${out}/${Number(mask)}` : out;
+}
 const fmtIban = (s) => String(s || '').replace(/(.{4})/g, '$1 ').trim();
 
 /** Convierte un valor almacenado a texto legible (para exportar). */
@@ -141,4 +162,4 @@ function toText(field, v, usersById = {}) {
   }
 }
 
-module.exports = { FIELD_TYPES, appFields, parseField, normalize, toText, normIban };
+module.exports = { FIELD_TYPES, appFields, parseField, normalize, toText, normIban, normIp };

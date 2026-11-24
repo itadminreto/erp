@@ -264,6 +264,12 @@ async function init() {
     await pool.query(`ALTER TABLE ${t} ALTER COLUMN width SET DEFAULT 'md'`);
     await pool.query(`UPDATE ${t} SET width = CASE width WHEN 'half' THEN 'md' WHEN 'third' THEN 'sm' ELSE width END WHERE width IN ('half', 'third')`);
   }
+  // «IP fija» de Fibras pasa al nuevo tipo «Dirección IP» (una sola vez)
+  const ipDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_ip_type_v1'");
+  if (!ipDone.length) {
+    await pool.query("UPDATE fields f JOIN apps a ON a.id = f.app_id SET f.type = 'ip' WHERE a.`key` = 'fibras' AND f.`key` = 'ip_fija' AND f.type = 'text'");
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_ip_type_v1', '1')");
+  }
   // Campos dinámicos de centros: la cuenta corriente pasa a ser un campo dinámico (una sola vez).
   const done = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_entity_fields_v1'");
   if (!done.length) {
