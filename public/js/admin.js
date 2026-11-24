@@ -29,15 +29,15 @@ async function simpleEntity(root, { title, sub, path, columns, form, newLabel, o
           } }, '🗑️')))))))
       : h('div.empty', h('div.big', '📭'), h('p', 'Sin registros')));
   }
-  async function edit(r) {
+  async function edit(r, prev = null) {
     const fields = typeof form === 'function' ? await form(r) : form;
-    const v = await promptDlg(r ? `Editar · ${r.name}` : newLabel, fields.map((f) => ({ ...f, value: r ? r[f.key] : f.value })));
+    const v = await promptDlg(r ? `Editar · ${r.name}` : newLabel, fields.map((f) => ({ ...f, value: prev ? prev[f.key] : r ? r[f.key] : f.value })));
     if (!v) return;
     try {
       if (r) await api(`/admin/${path}/${r.id}`, { method: 'PUT', body: v });
       else await api(`/admin/${path}`, { method: 'POST', body: v });
       toast('Guardado', 'ok'); load(); onChange && onChange();
-    } catch (e) { toastErr(e); }
+    } catch (e) { toastErr(e); edit(r, v); } // si falla, se reabre con lo escrito para corregirlo
   }
   load();
 }
@@ -73,12 +73,15 @@ export async function renderCenters(root) {
     title: 'Centros de trabajo / coste', sub: 'Los registros de cada aplicación se asignan a un centro y los permisos pueden limitarse por centro', path: 'centers', newLabel: 'Nuevo centro',
     columns: [{ key: 'company_name', label: 'Empresa' }, { key: 'code', label: 'Código' }, { key: 'name', label: 'Nombre' },
       { label: 'Tipo', render: (r) => h('span.chip', { trabajo: 'Centro de trabajo', coste: 'Centro de coste', ambos: 'Trabajo y coste' }[r.kind] || r.kind) },
+      { label: 'Cuenta corriente', render: (r) => (r.iban ? h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '.85rem' } }, r.iban.replace(/(.{4})/g, '$1 ').trim()) : '') },
       { label: 'Estado', render: (r) => h('span.chip', { class: r.active ? 'ok' : '' }, r.active ? 'Activo' : 'Inactivo') }],
     form: [
       { key: 'company_id', label: 'Empresa *', type: 'select', options: companies.map((c) => ({ value: c.id, label: c.name })), value: companies[0] && companies[0].id },
       { key: 'code', label: 'Código', placeholder: 'CC01' }, { key: 'name', label: 'Nombre *' },
       { key: 'kind', label: 'Tipo', type: 'select', value: 'trabajo', options: [{ value: 'trabajo', label: 'Centro de trabajo' }, { value: 'coste', label: 'Centro de coste' }, { value: 'ambos', label: 'Trabajo y coste' }] },
-      { key: 'address', label: 'Dirección' }, { key: 'notes', label: 'Notas', type: 'textarea' }, { key: 'active', label: 'Activo', type: 'checkbox', value: true }],
+      { key: 'address', label: 'Dirección' },
+      { key: 'iban', label: 'Cuenta corriente (IBAN)', placeholder: 'ES00 0000 0000 0000 0000 0000', help: 'Se comprueban los dígitos de control. Puedes escribirlo con o sin espacios.' },
+      { key: 'notes', label: 'Notas', type: 'textarea' }, { key: 'active', label: 'Activo', type: 'checkbox', value: true }],
   });
 }
 

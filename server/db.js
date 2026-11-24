@@ -245,6 +245,7 @@ async function init() {
 // Cambios de estructura posteriores a la primera versión (idempotentes).
 const MIGRATIONS = [
   'ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo MEDIUMTEXT NULL',
+  'ALTER TABLE centers ADD COLUMN IF NOT EXISTS iban VARCHAR(34) NULL AFTER address',
 ];
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */

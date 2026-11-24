@@ -275,3 +275,15 @@ test('vista calendario configurable por aplicación (por defecto solo en Recados
   await admin.call('PUT', `/admin/apps/${veh.id}`, { calendar: false });
   assert.equal((await admin.call('GET', '/apps/vehiculos')).body.app.calendar, 0);
 });
+
+test('centros: cuenta corriente (IBAN) validada', async () => {
+  const ok = await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: 'es91 2100 0418 4502 0005 1332' });
+  assert.equal(ok.status, 200); assert.equal(ok.body.iban, 'ES9121000418450200051332');
+  const bad = await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: 'ES91 2100 0418 4502 0005 1333' });
+  assert.equal(bad.status, 400); assert.match(bad.body.error, /dígitos de control/);
+  assert.equal((await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: 'ES91 2100' })).status, 400);
+  const clear = await admin.call('PUT', `/admin/centers/${ids.c1}`, { iban: '' });
+  assert.equal(clear.body.iban, null);
+  const h = await admin.call('GET', `/admin/audit?entity=centers`);
+  assert.ok(h.body.rows.some((r) => r.changes.some((c) => c.field === 'iban')), 'el cambio queda en la auditoría');
+});

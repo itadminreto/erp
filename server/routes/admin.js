@@ -72,7 +72,22 @@ crud('companies', 'companies', ['name', 'cif', 'address', 'email', 'phone', 'not
   listSql: 'SELECT id, name, cif, address, email, phone, notes, active, created_at, deleted_at, (logo IS NOT NULL) has_logo FROM companies',
   validate: (d, before) => { if ((!before || 'name' in d) && !String(d.name || '').trim()) throw httpError(400, 'El nombre es obligatorio'); if ('active' in d) d.active = bool(d.active); },
 });
-crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'notes', 'active'], {
+/** Valida un IBAN (longitud y dígitos de control, ISO 13616). Devuelve el IBAN sin espacios o lanza error. */
+function normIban(v) {
+  const s = String(v || '').replace(/[\s-]/g, '').toUpperCase();
+  if (!s) return null;
+  const LEN = { ES: 24, PT: 25, FR: 27, DE: 22, IT: 27, AD: 24, GB: 22, NL: 18, BE: 16 };
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(s) || (LEN[s.slice(0, 2)] && s.length !== LEN[s.slice(0, 2)])) {
+    throw httpError(400, 'Cuenta corriente: el IBAN no tiene un formato válido (ej. ES91 2100 0418 4502 0005 1332)');
+  }
+  const num = (s.slice(4) + s.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
+  let rem = 0;
+  for (const d of num) rem = (rem * 10 + Number(d)) % 97;
+  if (rem !== 1) throw httpError(400, 'Cuenta corriente: los dígitos de control del IBAN no son correctos (revisa el número)');
+  return s;
+}
+
+crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'iban', 'notes', 'active'], {
   orderBy: 'company_name, centers.code, centers.name',
   listSql: 'SELECT centers.*, companies.name company_name FROM centers JOIN companies ON companies.id = centers.company_id',
   labelOf: (r) => `${r.code ? r.code + ' · ' : ''}${r.name}`,
@@ -82,6 +97,7 @@ crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'no
     if ('kind' in d && !['trabajo', 'coste', 'ambos'].includes(d.kind)) throw httpError(400, 'Tipo de centro no válido');
     if ('active' in d) d.active = bool(d.active);
     if ('company_id' in d) d.company_id = Number(d.company_id);
+    if ('iban' in d) d.iban = normIban(d.iban);
   },
 });
 
