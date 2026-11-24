@@ -90,6 +90,9 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 | **Contraseñas** | Cifradas con AES-256-GCM. Las ven el super admin y los roles con «Ver contraseñas» (Admin centro). Se pueden copiar, generar y **enviar** por correo, WhatsApp, SMS o con un enlace/código de un solo uso con caducidad. |
 | **Trazabilidad** | Cada alta, cambio (campo a campo, antes → después), borrado, restauración, consulta/envío de contraseña, importación, exportación y acceso queda en la auditoría. Pestaña *Historial* en cada registro y vista global filtrable y exportable. |
 | **Papelera** | Borrar = enviar a la papelera. La casilla «🗑️ Ver papelera» muestra los borrados **en rojo**, con restaurar y (si se tiene permiso) eliminar definitivamente. También para empresas, centros, usuarios y roles. |
+| **Logo de empresa** | Se sube en *Empresas*; aparece en el menú y en la cabecera de todo lo que se imprime. |
+| **Imprimir y calendario** | Botón *Imprimir* en cada aplicación (listado filtrado o selección), en cada ficha (los recados incluyen líneas de firma) y en el calendario. Las aplicaciones con campos de fecha tienen vista *Calendario* mensual, coloreada por un campo de lista (p. ej. prioridad); doble clic en un día para crear. |
+| **Copias de seguridad** | En *Ajustes*: crear y descargar copia, copia automática diaria (con días de conservación), restaurar una copia del servidor o desde un archivo. Antes de restaurar se guarda automáticamente el estado actual. |
 | **Responsive e intuitivo** | Menú lateral plegable, tablas que pasan a tarjetas en móvil, formularios a pantalla completa en móvil, tema claro/oscuro. |
 | **Datos generales (super admin)** | Empresas, centros, usuarios, roles, aplicaciones/campos y ajustes (nombre, URL pública, SMTP). |
 

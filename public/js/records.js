@@ -3,6 +3,7 @@ import {
   api, h, clear, toast, toastErr, modal, confirmDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
   genPassword, copy, sortable, ACTION_LABELS, state,
 } from './core.js';
+import { printDoc, esc } from './print.js';
 
 const MASK = '••••••••';
 const META_COLS = {
@@ -18,11 +19,19 @@ export async function renderApp(root, key, onCountsChanged) {
   const fieldsByKey = Object.fromEntries(meta.fields.map((f) => [f.key, f]));
   const usersById = Object.fromEntries(meta.users.map((u) => [u.id, u]));
   const P = meta.perms;
-  const st = { q: '', center: '', trash: false, sort: '', dir: 'desc', page: 1, size: 50, selected: new Set(), rows: [], total: 0, filters: {} };
+  const st = { q: '', center: '', trash: false, sort: '', dir: 'desc', page: 1, size: 50, selected: new Set(), rows: [], total: 0, filters: {}, view: 'list', calMonth: '', calField: '', colorField: '' };
   const persistKey = `view:${key}`;
   try { Object.assign(st, JSON.parse(sessionStorage.getItem(persistKey) || '{}'), { selected: new Set(), page: 1 }); } catch { /* sin estado previo */ }
   if (!P.view_trash) st.trash = false;
-  const saveSt = () => { try { sessionStorage.setItem(persistKey, JSON.stringify({ q: st.q, center: st.center, trash: st.trash, sort: st.sort, dir: st.dir, size: st.size, filters: st.filters })); } catch { /* ignorar */ } };
+  const saveSt = () => { try { sessionStorage.setItem(persistKey, JSON.stringify({ q: st.q, center: st.center, trash: st.trash, sort: st.sort, dir: st.dir, size: st.size, filters: st.filters, view: st.view, calMonth: st.calMonth, calField: st.calField, colorField: st.colorField })); } catch { /* ignorar */ } };
+
+  // ----- calendario: campos de fecha y de color disponibles -----
+  const dateFields = meta.fields.filter((f) => ['date', 'datetime'].includes(f.type));
+  const colorFields = meta.fields.filter((f) => f.type === 'select' && (f.options.choices || []).length);
+  if (!dateFields.some((f) => f.key === st.calField)) st.calField = (dateFields.find((f) => /limite|vencim|proxim|fecha/.test(f.key)) || dateFields[0] || {}).key || '';
+  if (st.colorField !== '-' && !colorFields.some((f) => f.key === st.colorField)) st.colorField = (colorFields.find((f) => f.key === 'prioridad') || colorFields.find((f) => f.key === 'estado') || colorFields[0] || {}).key || '-';
+  if (!dateFields.length) st.view = 'list';
+  if (!/^\d{4}-\d{2}$/.test(st.calMonth)) st.calMonth = new Date().toISOString().slice(0, 7);
 
   // ----- columnas (diseño por usuario) -----
   const defaultCols = () => ['_center', ...meta.fields.filter((f) => f.show_in_list).map((f) => f.key), '_updated_at'];
@@ -53,21 +62,35 @@ export async function renderApp(root, key, onCountsChanged) {
   ]) : null;
   const importBtn = P.import ? h('button.btn', { onclick: () => openImport() }, '⬆ ', h('span.lbl', 'Importar')) : null;
   const colsBtn = h('button.btn', { title: 'Columnas', onclick: () => openColumns() }, '☰ ', h('span.lbl', 'Columnas'));
+  const printBtn = h('button.btn', { title: 'Imprimir', onclick: () => (st.view === 'calendar' ? printCalendar() : printList()) }, '🖨 ', h('span.lbl', 'Imprimir'));
+  const viewBtns = dateFields.length ? h('div.seg', { role: 'tablist' },
+    h('button', { class: st.view === 'list' ? 'on' : '', onclick: () => setView('list') }, '☰ Lista'),
+    h('button', { class: st.view === 'calendar' ? 'on' : '', onclick: () => setView('calendar') }, '📅 Calendario')) : null;
+  function setView(v) {
+    st.view = v; st.selected.clear();
+    [...viewBtns.children].forEach((b, i) => b.classList.toggle('on', (i === 0) === (v === 'list')));
+    listCard.hidden = v !== 'list'; calCard.hidden = v !== 'calendar'; colsBtn.hidden = v !== 'list';
+    trashLbl.hidden = v !== 'list';
+    load();
+  }
 
   const bulkBar = h('div.bulkbar', { hidden: true });
   const tableWrap = h('div.table-wrap.desktop-only');
   const mobileList = h('div.mobile-list');
   const pager = h('div.pager');
-  const listCard = h('div.card', tableWrap, h('div.mobile-only', { style: { padding: '10px' } }, mobileList), pager);
+  const listCard = h('div.card', { hidden: st.view !== 'list' }, tableWrap, h('div.mobile-only', { style: { padding: '10px' } }, mobileList), pager);
+  const calCard = h('div.card.cal-card', { hidden: st.view !== 'calendar' });
+  colsBtn.hidden = st.view !== 'list'; trashLbl.hidden = st.view !== 'list';
 
   clear(root,
-    h('div.page-head', titleEl, h('div.btn-group', importBtn, exportMenu, newBtn)),
-    h('div.toolbar', h('div.search', searchInp), meta.centers.length ? centerSel : null, P.view_trash ? trashLbl : null, h('div.spacer'), colsBtn),
-    bulkBar, listCard);
+    h('div.page-head', titleEl, h('div.btn-group', importBtn, exportMenu, printBtn, newBtn)),
+    h('div.toolbar', h('div.search', searchInp), meta.centers.length ? centerSel : null, P.view_trash ? trashLbl : null, h('div.spacer'), viewBtns, colsBtn),
+    bulkBar, listCard, calCard);
 
   // ----- carga -----
   async function load() {
     saveSt();
+    if (st.view === 'calendar') return loadCalendar();
     const qs = new URLSearchParams({ page: st.page, size: st.size });
     if (st.q) qs.set('q', st.q);
     if (st.center) qs.set('center', st.center);
@@ -79,6 +102,142 @@ export async function renderApp(root, key, onCountsChanged) {
       st.rows = r.rows; st.total = r.total;
       draw();
     } catch (e) { toastErr(e); }
+  }
+
+  function cellText(r, c) {
+    const f = fieldsByKey[c];
+    if (f && f.type === 'password') return r.data[c] ? '••••••' : '';
+    if (f && f.type === 'select') return r.data[c] || '';
+    if (f && f.type === 'url') return r.data[c] || '';
+    if (f && f.type === 'textarea') return r.data[c] || '';
+    const v = cellValue(r, c, { reveal: false });
+    return v instanceof Node ? v.textContent : String(v ?? '');
+  }
+
+  // ----- impresión -----
+  function filterQS() {
+    const qs = new URLSearchParams();
+    if (st.q) qs.set('q', st.q);
+    if (st.center) qs.set('center', st.center);
+    for (const [k, v] of Object.entries(st.filters)) if (v !== '') qs.set('f_' + k, v);
+    return qs;
+  }
+  function filterSummary() {
+    const parts = [];
+    if (st.center) { const c = meta.centers.find((x) => String(x.id) === String(st.center)); parts.push(c ? c.name : 'Sin centro'); }
+    if (st.q) parts.push(`búsqueda «${st.q}»`);
+    return parts.join(' · ');
+  }
+  async function printList() {
+    try {
+      const qs = filterQS();
+      if (st.trash) qs.set('trash', '1');
+      if (st.sort) { qs.set('sort', st.sort); qs.set('dir', st.dir); }
+      qs.set('size', 1000);
+      let rows = [], page = 1, total = 0;
+      do { qs.set('page', page); const r = await api(`/apps/${key}/records?${qs}`); rows = rows.concat(r.rows); total = r.total; page++; } while (rows.length < total && page <= 10);
+      if (st.selected.size) rows = rows.filter((r) => st.selected.has(r.id));
+      const cols = columns.map(colDef);
+      const body = `<table><thead><tr>${cols.map((c) => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>
+        ${rows.map((r) => `<tr class="${r.deleted_at ? 'deleted' : ''}">${cols.map((c) => `<td>${esc(cellText(r, c.key))}</td>`).join('')}</tr>`).join('')}
+        </tbody></table><footer>${rows.length} registro${rows.length === 1 ? '' : 's'}${st.selected.size ? ' seleccionados' : ''}</footer>`;
+      printDoc({ title: meta.app.name, subtitle: filterSummary(), bodyHtml: body, landscape: cols.length > 6 });
+    } catch (e) { toastErr(e); }
+  }
+  function printRecord(rec) {
+    let order = (meta.layouts.form && meta.layouts.form.order) || meta.fields.map((f) => f.key);
+    order = [...order.filter((k) => fieldsByKey[k]), ...meta.fields.map((f) => f.key).filter((k) => !order.includes(k))];
+    const rows = [['Centro', rec.center_name ? `${rec.center_code ? rec.center_code + ' · ' : ''}${rec.center_name}` : '—'],
+      ...order.map((k) => [fieldsByKey[k].label, cellText(rec, k) || '—'])];
+    const firma = key === 'recados'
+      ? '<div class="firma"><div>Entregado por</div><div>Recibido por</div><div>Fecha y firma de realización</div></div>' : '';
+    const body = `<table class="ficha"><tbody>${rows.map(([l, v]) => `<tr><th>${esc(l)}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>
+      <footer>#${rec.id} · Creado ${esc(fmtDateTime(rec.created_at))}${rec.created_by_name ? ' por ' + esc(rec.created_by_name) : ''} · Modificado ${esc(fmtDateTime(rec.updated_at))}${rec.deleted_at ? ' · EN LA PAPELERA' : ''}</footer>${firma}`;
+    printDoc({ title: String(rec.data[meta.app.title_field] || `${meta.app.name} #${rec.id}`), subtitle: meta.app.name, bodyHtml: body });
+  }
+
+  // ----- calendario -----
+  const PALETTE = ['#10b981', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'];
+  const DOW = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function monthGrid() {
+    const [y, m] = st.calMonth.split('-').map(Number);
+    const first = new Date(y, m - 1, 1);
+    const start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7)); // lunes anterior
+    const days = [];
+    for (let i = 0; i < 42; i++) { const d = new Date(start); d.setDate(start.getDate() + i); days.push(d); }
+    while (days.length > 35 && days[days.length - 7].getMonth() !== m - 1) days.splice(-7); // quita semanas sobrantes
+    return { y, m, days };
+  }
+  function colorOf(r) {
+    if (st.colorField === '-') return meta.app.color || '#6366f1';
+    const f = fieldsByKey[st.colorField]; const i = (f.options.choices || []).indexOf(r.data[st.colorField]);
+    return i < 0 ? '#94a3b8' : PALETTE[i % PALETTE.length];
+  }
+  const titleOf = (r) => String(r.data[meta.app.title_field] || `#${r.id}`);
+  let calRows = [];
+  async function loadCalendar() {
+    const { days } = monthGrid();
+    const qs = filterQS();
+    qs.set('date_field', st.calField); qs.set('from', iso(days[0])); qs.set('to', iso(days[days.length - 1]));
+    qs.set('size', 1000); qs.set('sort', st.calField); qs.set('dir', 'asc');
+    try { calRows = (await api(`/apps/${key}/records?${qs}`)).rows; drawCalendar(); } catch (e) { toastErr(e); }
+  }
+  function byDay() {
+    const map = {};
+    for (const r of calRows) { const d = String(r.data[st.calField] || '').slice(0, 10); (map[d] = map[d] || []).push(r); }
+    return map;
+  }
+  function drawCalendar() {
+    const { y, m, days } = monthGrid();
+    const map = byDay();
+    const today = iso(new Date());
+    const monthName = new Date(y, m - 1, 1).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }).replace(/^./, (c) => c.toUpperCase());
+    const shift = (n) => { const d = new Date(y, m - 1 + n, 1); st.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; load(); };
+    const dateSel = h('select', { onchange: (e) => { st.calField = e.target.value; load(); } }, dateFields.map((f) => h('option', { value: f.key, selected: f.key === st.calField }, f.label)));
+    const colorSel = h('select', { onchange: (e) => { st.colorField = e.target.value; saveSt(); drawCalendar(); } },
+      h('option', { value: '-' }, 'Sin color'), colorFields.map((f) => h('option', { value: f.key, selected: f.key === st.colorField }, f.label)));
+    const chip = (r) => h('button.cal-ev', { style: { '--c': colorOf(r) }, title: titleOf(r), onclick: (e) => { e.stopPropagation(); openRecord(r); } }, titleOf(r));
+    const MAX = 3;
+    const grid = h('div.cal-grid',
+      DOW.map((d) => h('div.cal-dow', d)),
+      days.map((d) => {
+        const k = iso(d); const list = map[k] || [];
+        return h('div.cal-day', {
+          class: [d.getMonth() !== m - 1 ? 'out' : '', k === today ? 'today' : '', d.getDay() % 6 === 0 ? 'we' : ''].join(' '),
+          title: P.create ? 'Doble clic para crear' : '',
+          ondblclick: () => P.create && openRecord(null, { [st.calField]: st.calField && fieldsByKey[st.calField].type === 'datetime' ? k + 'T09:00' : k }),
+        }, h('div.cal-num', d.getDate()),
+        list.slice(0, MAX).map(chip),
+        list.length > MAX ? h('button.cal-more', { onclick: () => openDay(k, list) }, `+${list.length - MAX} más`) : null);
+      }));
+    // vista agenda (móvil)
+    const daysWith = days.filter((d) => d.getMonth() === m - 1 && map[iso(d)]);
+    const agenda = h('div.cal-agenda', daysWith.length ? daysWith.map((d) => h('div.cal-agenda-day',
+      h('div.cal-agenda-date', { class: iso(d) === today ? 'today' : '' }, d.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })),
+      h('div', map[iso(d)].map(chip)))) : h('div.empty', 'Nada este mes'));
+    const legend = st.colorField !== '-' ? h('div.cal-legend', (fieldsByKey[st.colorField].options.choices || []).map((c, i) => h('span', { style: { '--c': PALETTE[i % PALETTE.length] } }, c))) : null;
+    clear(calCard,
+      h('div.cal-head',
+        h('div.row', h('button.btn.sm', { onclick: () => shift(-1) }, '‹'), h('button.btn.sm', { onclick: () => { st.calMonth = today.slice(0, 7); load(); } }, 'Hoy'), h('button.btn.sm', { onclick: () => shift(1) }, '›'),
+          h('h2.cal-title', monthName)),
+        h('div.row', h('label.small.muted', 'Fecha'), dateSel, colorFields.length ? [h('label.small.muted', 'Color'), colorSel] : null)),
+      h('div.desktop-only', grid), h('div.mobile-only', agenda), legend,
+      h('div.muted.small', { style: { padding: '0 14px 12px' } }, `${calRows.length} en el periodo${P.create ? ' · doble clic en un día para crear' : ''}`));
+  }
+  function openDay(k, list) {
+    const m = modal({ title: fmtDate(k), size: 'sm', content: h('div.stack', { style: { gap: '6px' } }, list.map((r) => h('button.cal-ev', { style: { '--c': colorOf(r) }, onclick: () => { m.close(); openRecord(r); } }, titleOf(r)))) });
+  }
+  function printCalendar() {
+    const { y, m, days } = monthGrid();
+    const map = byDay();
+    const weeks = []; for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+    const body = `<table class="cal"><thead><tr>${DOW.map((d) => `<th>${d}</th>`).join('')}</tr></thead><tbody>
+      ${weeks.map((w) => `<tr>${w.map((d) => `<td class="${d.getMonth() !== m - 1 ? 'out' : ''}"><div class="d">${d.getDate()}</div>${(map[iso(d)] || []).map((r) => `<div class="ev" style="border-color:${colorOf(r)}">${esc(titleOf(r))}</div>`).join('')}</td>`).join('')}</tr>`).join('')}
+      </tbody></table>
+      ${st.colorField !== '-' ? `<div class="legend">${(fieldsByKey[st.colorField].options.choices || []).map((c, i) => `<span style="--c:${PALETTE[i % PALETTE.length]}">${esc(c)}</span>`).join('')}</div>` : ''}`;
+    const title = `${meta.app.name} · ${new Date(y, m - 1, 1).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}`;
+    printDoc({ title, subtitle: [fieldsByKey[st.calField].label, filterSummary()].filter(Boolean).join(' · '), bodyHtml: body, landscape: true });
   }
 
   function cellValue(r, c, { reveal = true } = {}) {
@@ -235,7 +394,7 @@ export async function renderApp(root, key, onCountsChanged) {
   }
 
   // ----- formulario de registro -----
-  async function openRecord(rec) {
+  async function openRecord(rec, prefill = {}) {
     if (rec) { try { rec = await api(`/apps/${key}/records/${rec.id}`); } catch (e) { return toastErr(e); } }
     const isNew = !rec;
     const editable = isNew ? P.create : rec.can.edit;
@@ -255,7 +414,7 @@ export async function renderApp(root, key, onCountsChanged) {
     drawGrid();
 
     function buildField(f) {
-      const v = rec ? rec.data[f.key] : (f.type === 'checkbox' ? false : '');
+      const v = rec ? rec.data[f.key] : (f.key in prefill ? prefill[f.key] : (f.type === 'checkbox' ? false : ''));
       let input; let extra = null;
       const dis = !editable;
       switch (f.type) {
@@ -371,6 +530,7 @@ export async function renderApp(root, key, onCountsChanged) {
       if (rec.can.restore) footer.push(h('button.btn.ok', { onclick: () => restoreRec(rec, () => m.close()) }, '↩ Restaurar'));
       if (rec.can.purge) footer.push(h('button.btn.danger', { onclick: () => purgeRec(rec, () => m.close()) }, 'Eliminar definitivamente'));
     } else if (rec && rec.can.delete) footer.push(h('button.btn.danger', { onclick: () => deleteRec(rec, () => m.close()) }, '🗑️ Papelera'));
+    if (rec) footer.push(h('button.btn', { title: 'Imprimir ficha', onclick: () => printRecord(rec) }, '🖨 Imprimir'));
     footer.push(h('div.spacer'), h('button.btn', { onclick: () => m.close() }, editable ? 'Cancelar' : 'Cerrar'));
     if (editable && !(rec && rec.deleted_at)) {
       const saveBtn = h('button.btn.primary', { onclick: async () => {

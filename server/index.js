@@ -108,6 +108,16 @@ app.get('/api/companies/:id/centers', requireAuth, wrap(async (req, res) => {
   if (!(await userCompanies(req.user)).some((c) => c.id === id)) throw httpError(403, 'Sin acceso');
   res.json(await all('SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL ORDER BY code, name', id));
 }));
+app.get('/api/companies/:id/logo', requireAuth, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!(await userCompanies(req.user)).some((c) => c.id === id)) throw httpError(403, 'Sin acceso');
+  const row = await get('SELECT logo FROM companies WHERE id = ?', id);
+  const m = row && row.logo && row.logo.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/);
+  if (!m) throw httpError(404, 'Sin logo');
+  res.setHeader('Content-Type', m[1]);
+  res.setHeader('Cache-Control', 'private, no-cache');
+  res.send(Buffer.from(m[2], 'base64'));
+}));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
 
 // ---------- frontend ----------
@@ -123,7 +133,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || undefined; // p. ej. 127.0.0.1 para escuchar solo detrás del proxy
 if (require.main === module) {
   app.ready
-    .then(() => app.listen(PORT, HOST, () => console.log(`ERP escuchando en http://${HOST || 'localhost'}:${PORT} (MariaDB: ${db.DB_NAME})`)))
+    .then(() => { require('./backup').startScheduler(); return app.listen(PORT, HOST, () => console.log(`ERP escuchando en http://${HOST || 'localhost'}:${PORT} (MariaDB: ${db.DB_NAME})`)); })
     .catch((e) => { console.error('No se pudo conectar a MariaDB:', e.message); process.exit(1); });
 }
 module.exports = app;

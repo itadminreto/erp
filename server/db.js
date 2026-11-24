@@ -233,8 +233,18 @@ async function init() {
   for (const sql of SCHEMA) {
     await pool.query(sql.replace(/\)\s*$/, ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'));
   }
+  for (const sql of MIGRATIONS) await pool.query(sql);
 }
+
+// Cambios de estructura posteriores a la primera versión (idempotentes).
+const MIGRATIONS = [
+  'ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo MEDIUMTEXT NULL',
+];
+
+/** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
+const BACKUP_TABLES = ['companies', 'centers', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
+  'records', 'audit_log', 'user_layouts', 'settings', 'share_links'];
 
 const close = () => pool.end();
 
-module.exports = { pool, all, get, run, tx, init, close, sqlDate, DATA_DIR, DB_NAME };
+module.exports = { pool, all, get, run, tx, init, close, sqlDate, DATA_DIR, DB_NAME, BACKUP_TABLES };

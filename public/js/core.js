@@ -25,7 +25,7 @@ export function h(tag, attrs, ...children) {
     if (v === undefined || v === null || v === false) continue;
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'class') el.className += (el.className ? ' ' : '') + v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') for (const [sk, sv] of Object.entries(v)) { if (sk.startsWith('--')) el.style.setProperty(sk, sv); else el.style[sk] = sv; }
     else if (k === 'dataset') Object.assign(el.dataset, v);
     else if (['value', 'checked', 'selected', 'disabled', 'hidden', 'indeterminate'].includes(k)) el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
@@ -144,5 +144,5 @@ export const PERM_LABELS = {
 export const ACTION_LABELS = {
   create: ['Alta', 'ok'], update: ['Modificación', ''], delete: ['Papelera', 'danger'], restore: ['Restaurado', 'ok'], purge: ['Borrado definitivo', 'danger'],
   reveal: ['Contraseña vista', 'warn'], share: ['Contraseña enviada', 'warn'], share_open: ['Enlace abierto', 'warn'], export: ['Exportación', ''], import: ['Importación', ''],
-  login: ['Acceso', ''], login_failed: ['Acceso fallido', 'danger'], password: ['Cambio contraseña', 'warn'],
+  backup: ['Copia de seguridad', 'ok'], login: ['Acceso', ''], login_failed: ['Acceso fallido', 'danger'], password: ['Cambio contraseña', 'warn'],
 };

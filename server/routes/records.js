@@ -127,7 +127,9 @@ const wrap = (fn) => async (req, res) => {
 function fail(res, e) {
   if (!e.status) console.error(e);
   if (res.headersSent) return res.end();
-  res.status(e.status || 500).json({ error: e.status ? e.message : 'Error interno: ' + e.message });
+  const body = { error: e.status ? e.message : 'Error interno: ' + e.message };
+  if (e.status && typeof e.code === 'string' && /^[a-z_]+$/.test(e.code)) body.code = e.code;
+  res.status(e.status || 500).json(body);
 }
 const pwKeysOf = (req) => req.fields.filter((f) => f.type === 'password').map((f) => f.key);
 
@@ -198,6 +200,14 @@ function listQuery(req, q) {
       params.push(`%${t}%`, `%${t}%`, `%${t}%`, t);
     }
   }
+  // rango de fechas (vista calendario): date_field, from, to (AAAA-MM-DD)
+  if (q.date_field) {
+    const f = req.fields.find((x) => x.key === q.date_field && ['date', 'datetime'].includes(x.type));
+    if (!f) throw httpError(400, 'Campo de fecha no válido');
+    const ok = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
+    where.push(`LEFT(${jv(f.key)}, 10) BETWEEN ? AND ?`);
+    params.push(ok(q.from) ? q.from : '0000-01-01', ok(q.to) ? q.to : '9999-12-31');
+  }
   // filtros por columna: f_<campo>=valor
   for (const [k, v] of Object.entries(q)) {
     if (!k.startsWith('f_') || v === '') continue;
@@ -225,7 +235,7 @@ function listQuery(req, q) {
 
 router.get('/:appKey/records', wrap(async (req, res) => {
   const { where, params, order } = listQuery(req, req.query);
-  const size = Math.min(Math.max(Number(req.query.size) || 50, 1), 500);
+  const size = Math.min(Math.max(Number(req.query.size) || 50, 1), 1000);
   const page = Math.max(Number(req.query.page) || 1, 1);
   const total = (await get(`SELECT COUNT(*) n FROM records r LEFT JOIN centers c ON c.id = r.center_id WHERE ${where}`, ...params)).n;
   const rows = await all(`${SELECT_REC} WHERE ${where} ORDER BY ${order}, r.id DESC LIMIT ? OFFSET ?`, ...params, size, (page - 1) * size);

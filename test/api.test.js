@@ -188,3 +188,60 @@ test('la simulación detecta duplicados dentro del mismo fichero y no guarda nad
   const l = await admin.call('GET', '/apps/vehiculos/records?q=DUP1');
   assert.equal(l.body.total, 0);
 });
+
+test('logo de empresa: subir, ver y borrar', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const fd = new FormData(); fd.append('file', new Blob([png], { type: 'image/png' }), 'logo.png');
+  assert.equal((await admin.call('POST', `/admin/companies/${ids.company}/logo`, undefined, { form: fd })).status, 200);
+  const me = await admin.call('GET', '/me');
+  assert.equal(me.body.companies.find((c) => c.id === ids.company).has_logo, 1);
+  const img = await admin.call('GET', `/companies/${ids.company}/logo`);
+  assert.equal(img.status, 200); assert.deepEqual(img.body, png);
+  const list = await admin.call('GET', '/admin/companies');
+  assert.ok(!('logo' in list.body[0]), 'el listado no incluye el binario');
+  const svg = new FormData(); svg.append('file', new Blob(['<svg/>'], { type: 'image/svg+xml' }), 'x.svg');
+  assert.equal((await admin.call('POST', `/admin/companies/${ids.company}/logo`, undefined, { form: svg })).status, 400);
+  const anaC = client(); await anaC.login('ana@test.com', 'anapass123');
+  assert.equal((await anaC.call('GET', `/companies/${ids.company}/logo`)).status, 200, 'los usuarios de la empresa ven el logo');
+  assert.equal((await admin.call('DELETE', `/admin/companies/${ids.company}/logo`)).status, 200);
+  assert.equal((await admin.call('GET', `/companies/${ids.company}/logo`)).status, 404);
+});
+
+test('filtro por rango de fechas (calendario)', async () => {
+  await admin.call('PUT', `/apps/vehiculos/records/${ids.v1}`, { data: { itv_proxima: '2027-03-05' } });
+  const inR = await admin.call('GET', '/apps/vehiculos/records?date_field=itv_proxima&from=2027-03-01&to=2027-03-31');
+  assert.deepEqual(inR.body.rows.map((r) => r.id), [ids.v1]);
+  const outR = await admin.call('GET', '/apps/vehiculos/records?date_field=itv_proxima&from=2027-04-01&to=2027-04-30');
+  assert.equal(outR.body.total, 0);
+  assert.equal((await admin.call('GET', '/apps/vehiculos/records?date_field=marca')).status, 400);
+});
+
+test('copia de seguridad y restauración', async () => {
+  const b = await admin.call('POST', '/admin/backups');
+  assert.equal(b.status, 201); assert.match(b.body.name, /_manual\.json\.gz$/);
+  const before = (await admin.call('GET', '/apps/vehiculos/records')).body.total;
+  // cambio posterior a la copia: se perderá al restaurar
+  await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'TRAS-COPIA' } });
+  const file = await admin.call('GET', `/admin/backups/${b.body.name}`);
+  assert.equal(file.status, 200); assert.equal(file.body[0], 0x1f, 'gzip');
+  const r = await admin.call('POST', `/admin/backups/${b.body.name}/restore`);
+  assert.equal(r.status, 200); assert.match(r.body.safety, /antes-restaurar/);
+  assert.equal((await admin.call('GET', '/me')).status, 401, 'la restauración cierra las sesiones');
+  await admin.login('admin@erp.local', 'superadmin123');
+  const after = await admin.call('GET', '/apps/vehiculos/records');
+  assert.equal(after.body.total, before);
+  assert.ok(!after.body.rows.some((x) => x.data.matricula === 'TRAS-COPIA'));
+  const pw = await admin.call('GET', `/apps/vehiculos/records/${ids.v1}/password/pin_tarjeta`);
+  assert.equal(pw.body.value, '9876', 'las contraseñas siguen descifrándose');
+  const list = await admin.call('GET', '/admin/backups');
+  assert.ok(list.body.list.some((x) => x.kind === 'antes-restaurar'));
+  // subir un archivo de otra instalación (otra APP_SECRET): avisa y solo restaura con force
+  const zlib = require('zlib');
+  const doc = JSON.parse(zlib.gunzipSync(file.body)); doc.canary = 'enc:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const fd = new FormData(); fd.append('file', new Blob([zlib.gzipSync(JSON.stringify(doc))]), 'otra.json.gz');
+  const up = await admin.call('POST', '/admin/backups-upload?restore=1', undefined, { form: fd });
+  assert.equal(up.status, 409); assert.equal(up.body.code, 'secret_mismatch');
+  const bad = new FormData(); bad.append('file', new Blob(['hola']), 'x.json.gz');
+  assert.equal((await admin.call('POST', '/admin/backups-upload', undefined, { form: bad })).status, 400);
+  assert.equal((await admin.call('GET', '/admin/backups/..%2F..%2Fetc%2Fpasswd')).status, 400);
+});

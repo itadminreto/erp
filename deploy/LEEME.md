@@ -121,7 +121,8 @@ Copia el valor de `APP_SECRET` del servidor interno al `/etc/erp/erp.env` de pro
 |---|---|
 | Código (git) | `/opt/erp` |
 | Configuración y claves | `/etc/erp/erp.env` (solo root) — **haz copia** |
-| Copias de seguridad diarias (03:15, 14 días) | `/var/backups/erp` |
+| Copias de seguridad diarias del sistema (03:15, 14 días) | `/var/backups/erp` |
+| Copias hechas desde la aplicación (*Ajustes → Copias de seguridad*) | `/var/lib/erp/backups` |
 | Copia manual | `sudo bash /opt/erp/deploy/backup.sh` |
 | Ver registros del servicio | `journalctl -u erp -f` |
 | Reiniciar / estado | `systemctl restart erp` · `systemctl status erp` |

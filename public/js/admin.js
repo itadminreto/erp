@@ -20,7 +20,7 @@ async function simpleEntity(root, { title, sub, path, columns, form, newLabel, o
     clear(tableBox, list.length ? h('div.table-wrap', h('table.data',
       h('thead', h('tr', columns.map((c) => h('th.nosort', c.label)), h('th.nosort', ''))),
       h('tbody', list.map((r) => h('tr', { class: r.deleted_at ? 'deleted' : '', onclick: () => !r.deleted_at && edit(r) },
-        columns.map((c) => h('td', c.render ? c.render(r) : r[c.key] ?? '')),
+        columns.map((c) => h('td', c.render ? c.render(r, load) : r[c.key] ?? '')),
         h('td.actions', { onclick: (e) => e.stopPropagation() }, r.deleted_at
           ? h('button.btn.sm.ok', { onclick: async () => { await api(`/admin/${path}/${r.id}/restore`, { method: 'POST' }); toast('Restaurado', 'ok'); load(); onChange && onChange(); } }, '↩ Restaurar')
           : h('button.btn.sm.ghost', { title: 'Papelera', onclick: async () => {
@@ -42,10 +42,27 @@ async function simpleEntity(root, { title, sub, path, columns, form, newLabel, o
   load();
 }
 
+/** Celda con el logo de la empresa y botones para subirlo, cambiarlo o quitarlo. */
+function logoCell(r, after) {
+  const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: true, onchange: async () => {
+    if (!file.files[0]) return;
+    const fd = new FormData(); fd.append('file', file.files[0]);
+    try { await api(`/admin/companies/${r.id}/logo`, { method: 'POST', form: fd }); toast('Logo actualizado', 'ok'); after(); } catch (e) { toastErr(e); }
+  } });
+  return h('div.row', { style: { flexWrap: 'nowrap', gap: '6px' }, onclick: (e) => e.stopPropagation() }, file,
+    r.has_logo && r.active && !r.deleted_at ? h('img.logo-thumb', { src: `/api/companies/${r.id}/logo?v=${Date.now()}`, alt: 'Logo' }) : null,
+    r.deleted_at ? null : h('button.btn.sm', { title: 'PNG, JPG, WebP o GIF · máx. 2 MB', onclick: () => file.click() }, r.has_logo ? 'Cambiar' : '🖼 Subir logo'),
+    r.has_logo && !r.deleted_at ? h('button.btn.sm.ghost', { title: 'Quitar logo', onclick: async () => {
+      if (!(await confirmDlg('¿Quitar el logo de la empresa?'))) return;
+      try { await api(`/admin/companies/${r.id}/logo`, { method: 'DELETE' }); after(); } catch (e) { toastErr(e); }
+    } }, '✕') : null);
+}
+
 export function renderCompanies(root, onChange) {
   return simpleEntity(root, {
     title: 'Empresas', sub: 'Entorno multi-empresa: cada empresa tiene sus centros, usuarios y datos separados', path: 'companies', newLabel: 'Nueva empresa', onChange,
-    columns: [{ key: 'name', label: 'Nombre' }, { key: 'cif', label: 'CIF' }, { key: 'email', label: 'Email' }, { key: 'phone', label: 'Teléfono' }, { label: 'Estado', render: (r) => h('span.chip', { class: r.active ? 'ok' : '' }, r.active ? 'Activa' : 'Inactiva') }],
+    columns: [{ label: 'Logo', render: (r, reload) => logoCell(r, async () => { await reload(); onChange && onChange(); }) },
+      { key: 'name', label: 'Nombre' }, { key: 'cif', label: 'CIF' }, { key: 'email', label: 'Email' }, { key: 'phone', label: 'Teléfono' }, { label: 'Estado', render: (r) => h('span.chip', { class: r.active ? 'ok' : '' }, r.active ? 'Activa' : 'Inactiva') }],
     form: [{ key: 'name', label: 'Nombre *' }, { key: 'cif', label: 'CIF / NIF' }, { key: 'address', label: 'Dirección' }, { key: 'email', label: 'Email', type: 'email' }, { key: 'phone', label: 'Teléfono' }, { key: 'notes', label: 'Notas', type: 'textarea' }, { key: 'active', label: 'Activa', type: 'checkbox', value: true }],
   });
 }
@@ -264,7 +281,77 @@ export async function renderSettings(root) {
         h('button.btn.primary', { onclick: async () => {
           const body = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value]));
           try { await api('/admin/settings', { method: 'PUT', body }); toast('Ajustes guardados', 'ok'); } catch (e) { toastErr(e); }
-        } }, 'Guardar'))));
+        } }, 'Guardar'))),
+    backupCard(s));
+}
+
+// ---------- copias de seguridad (dentro de Ajustes) ----------
+const fmtSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+function backupCard(s) {
+  const auto = h('input', { type: 'checkbox', checked: s.backup_auto !== '0' });
+  const keep = h('input', { type: 'number', min: 1, max: 365, value: s.backup_keep || 14, style: { width: '90px' } });
+  const listBox = h('div');
+  const fileInp = h('input', { type: 'file', accept: '.gz,application/gzip' });
+
+  async function load() {
+    try {
+      const r = await api('/admin/backups');
+      clear(listBox, r.list.length ? h('div.table-wrap', h('table.data',
+        h('thead', h('tr', ['Fecha', 'Tipo', 'Tamaño', ''].map((t) => h('th.nosort', t)))),
+        h('tbody', r.list.map((b) => h('tr', { style: { cursor: 'default' } },
+          h('td', fmtDateTime(b.created_at)),
+          h('td', h('span.chip', { class: b.kind === 'manual' ? 'ok' : b.kind === 'antes-restaurar' ? 'warn' : '' }, b.kind_label)),
+          h('td.small', fmtSize(b.size)),
+          h('td.actions', h('div.btn-group', { style: { flexWrap: 'nowrap' } },
+            h('button.btn.sm', { title: 'Descargar', onclick: () => download(`/admin/backups/${encodeURIComponent(b.name)}`, b.name) }, '⬇'),
+            h('button.btn.sm.danger', { onclick: () => restore(`/admin/backups/${encodeURIComponent(b.name)}/restore`, null, fmtDateTime(b.created_at)) }, '↩ Restaurar'),
+            h('button.btn.sm.ghost', { title: 'Borrar', onclick: async () => {
+              if (!(await confirmDlg(`¿Borrar la copia del ${fmtDateTime(b.created_at)}?`, { danger: true }))) return;
+              try { await api(`/admin/backups/${encodeURIComponent(b.name)}`, { method: 'DELETE' }); load(); } catch (e) { toastErr(e); }
+            } }, '🗑️')))))))) : h('p.muted', 'Todavía no hay copias.'),
+      h('p.muted.small', `Se guardan en el servidor, en ${r.dir}.`));
+    } catch (e) { toastErr(e); }
+  }
+
+  async function restore(url, form, label, force = false) {
+    if (!force && !(await confirmDlg(
+      `Se sustituirán TODOS los datos actuales por los de la copia (${label}). Antes se guardará automáticamente una copia del estado actual. Todos los usuarios tendrán que volver a iniciar sesión.`,
+      { ok: 'Restaurar', danger: true, title: 'Restaurar copia de seguridad' }))) return;
+    try {
+      const r = await api(url + (force ? (url.includes('?') ? '&' : '?') + 'force=1' : ''), { method: 'POST', form: form || undefined });
+      const n = Object.values(r.counts).reduce((a, b) => a + b, 0);
+      toast(`Copia restaurada (${n} filas). Vuelve a iniciar sesión.`, 'ok');
+      setTimeout(() => location.reload(), 1500);
+    } catch (e) {
+      if (/otra clave APP_SECRET/.test(e.message)) {
+        const again = await confirmDlg(`${e.message} Solo continúa si sabes lo que haces (por ejemplo, si vas a poner después la misma APP_SECRET del servidor de origen).`,
+          { ok: 'Restaurar igualmente', danger: true, title: 'Clave de cifrado distinta' });
+        if (again) restore(url, form && (() => { const fd = new FormData(); fd.append('file', fileInp.files[0]); return fd; })(), label, true);
+      } else toastErr(e);
+    }
+  }
+
+  load();
+  return h('div.card.card-pad.stack', { style: { maxWidth: '760px', marginTop: '16px' } },
+    h('h2', '💾 Copias de seguridad'),
+    h('p.muted.small', 'Incluyen todas las empresas, usuarios, roles, aplicaciones, registros, papelera, auditoría y ajustes. Las contraseñas van cifradas: para restaurarlas en otro servidor hace falta la misma APP_SECRET.'),
+    h('div.row', h('label.check', auto, 'Copia automática diaria'), h('span.muted.small', 'Conservar'), keep, h('span.muted.small', 'días'), h('div.spacer'),
+      h('button.btn', { onclick: async () => {
+        try { await api('/admin/settings', { method: 'PUT', body: { backup_auto: auto.checked ? '1' : '0', backup_keep: String(keep.value || 14) } }); toast('Guardado', 'ok'); } catch (e) { toastErr(e); }
+      } }, 'Guardar')),
+    h('div.row', h('button.btn.primary', { onclick: async (e) => {
+      e.target.disabled = true;
+      try { const b = await api('/admin/backups', { method: 'POST' }); toast('Copia creada', 'ok'); await load(); download(`/admin/backups/${encodeURIComponent(b.name)}`, b.name); }
+      catch (err) { toastErr(err); } finally { e.target.disabled = false; }
+    } }, '💾 Crear copia ahora y descargar')),
+    listBox,
+    h('h3', 'Restaurar desde un archivo'),
+    h('div.row', fileInp, h('button.btn.danger', { onclick: () => {
+      if (!fileInp.files[0]) return toast('Selecciona un archivo .json.gz', 'error');
+      const fd = new FormData(); fd.append('file', fileInp.files[0]);
+      restore('/admin/backups-upload?restore=1', fd, fileInp.files[0].name);
+    } }, '↩ Restaurar archivo')));
 }
 
 // ---------- auditoría ----------

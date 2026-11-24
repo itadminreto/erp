@@ -8,6 +8,12 @@ const { encrypt } = require('../crypto');
 const { audit, diff } = require('../audit');
 const { sendMail } = require('../mailer');
 const { wrap, httpError, sendSheet } = require('./records');
+const multer = require('multer');
+const backup = require('../backup');
+
+const uploadLogo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+const uploadBackup = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
 const router = express.Router();
 const KEY_RE = /^[a-z][a-z0-9_]{0,40}$/;
@@ -17,6 +23,8 @@ const bool = (v) => (v === true || v === 1 || v === '1' || v === 'true' ? 1 : 0)
 const q = (c) => '`' + c + '`'; // escapa nombres de columna (p. ej. `key`)
 
 /** CRUD genérico con borrado lógico y trazabilidad para tablas simples. */
+const strip = (r) => { if (r) delete r.logo; return r; };
+
 function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSql, labelOf = (r) => r.name } = {}) {
   router.get(`/${entity}`, wrap(async (req, res) => {
     const trash = req.query.trash === '1';
@@ -29,7 +37,7 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
     const keys = Object.keys(data);
     const id = Number((await run(`INSERT INTO ${table} (${keys.map(q).join(',')}) VALUES (${keys.map(() => '?').join(',')})`, ...keys.map((k) => data[k]))).lastInsertRowid);
     await audit(req, { entity, entityId: id, action: 'create', summary: `Alta: ${labelOf(data)}`, changes: diff({}, data) });
-    res.status(201).json(await get(`SELECT * FROM ${table} WHERE id = ?`, id));
+    res.status(201).json(strip(await get(`SELECT * FROM ${table} WHERE id = ?`, id)));
   }));
   router.put(`/${entity}/:id`, wrap(async (req, res) => {
     const before = await get(`SELECT * FROM ${table} WHERE id = ?`, Number(req.params.id));
@@ -40,7 +48,7 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
     if (keys.length) await run(`UPDATE ${table} SET ${keys.map((k) => `${q(k)} = ?`).join(',')} WHERE id = ?`, ...keys.map((k) => data[k]), before.id);
     const changes = diff(pick(before, keys), data);
     if (changes.length) await audit(req, { entity, entityId: before.id, action: 'update', summary: `Modificación: ${labelOf({ ...before, ...data })}`, changes });
-    res.json(await get(`SELECT * FROM ${table} WHERE id = ?`, before.id));
+    res.json(strip(await get(`SELECT * FROM ${table} WHERE id = ?`, before.id)));
   }));
   router.delete(`/${entity}/:id`, wrap(async (req, res) => {
     const r = await get(`SELECT * FROM ${table} WHERE id = ?`, Number(req.params.id));
@@ -61,6 +69,7 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
 // ---------- empresas y centros ----------
 crud('companies', 'companies', ['name', 'cif', 'address', 'email', 'phone', 'notes', 'active'], {
   orderBy: 'name',
+  listSql: 'SELECT id, name, cif, address, email, phone, notes, active, created_at, deleted_at, (logo IS NOT NULL) has_logo FROM companies',
   validate: (d, before) => { if ((!before || 'name' in d) && !String(d.name || '').trim()) throw httpError(400, 'El nombre es obligatorio'); if ('active' in d) d.active = bool(d.active); },
 });
 crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'notes', 'active'], {
@@ -75,6 +84,24 @@ crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'no
     if ('company_id' in d) d.company_id = Number(d.company_id);
   },
 });
+
+// Logo de empresa (PNG, JPG, WebP o GIF; máx. 2 MB). Se guarda en la propia BD para que entre en las copias.
+router.post('/companies/:id/logo', uploadLogo.single('file'), wrap(async (req, res) => {
+  const c = await get('SELECT id, name FROM companies WHERE id = ?', Number(req.params.id));
+  if (!c) throw httpError(404, 'Empresa no encontrada');
+  if (!req.file) throw httpError(400, 'Adjunta una imagen');
+  if (!LOGO_TYPES.includes(req.file.mimetype)) throw httpError(400, 'Formato no admitido: usa PNG, JPG, WebP o GIF');
+  await run('UPDATE companies SET logo = ? WHERE id = ?', `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`, c.id);
+  await audit(req, { entity: 'companies', entityId: c.id, action: 'update', summary: `Logo actualizado: ${c.name}` });
+  res.json({ ok: true });
+}));
+router.delete('/companies/:id/logo', wrap(async (req, res) => {
+  const c = await get('SELECT id, name FROM companies WHERE id = ?', Number(req.params.id));
+  if (!c) throw httpError(404, 'Empresa no encontrada');
+  await run('UPDATE companies SET logo = NULL WHERE id = ?', c.id);
+  await audit(req, { entity: 'companies', entityId: c.id, action: 'update', summary: `Logo eliminado: ${c.name}` });
+  res.json({ ok: true });
+}));
 
 // ---------- usuarios ----------
 router.get('/users', wrap(async (req, res) => {
@@ -288,11 +315,13 @@ router.put('/apps/:id/fields-order', wrap(async (req, res) => {
 }));
 
 // ---------- ajustes ----------
-const SETTINGS = ['public_url', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass', 'smtp_from', 'app_name'];
+const SETTINGS = ['public_url', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass', 'smtp_from', 'app_name', 'backup_auto', 'backup_keep'];
 router.get('/settings', wrap(async (req, res) => {
   const out = Object.fromEntries(SETTINGS.map((k) => [k, '']));
   for (const r of await all('SELECT `key`, value FROM settings')) if (r.key in out) out[r.key] = r.value || '';
   out.smtp_pass = out.smtp_pass ? '••••••••' : '';
+  if (out.backup_auto === '') out.backup_auto = '1';
+  if (out.backup_keep === '') out.backup_keep = '14';
   res.json(out);
 }));
 router.put('/settings', wrap(async (req, res) => {
@@ -310,6 +339,39 @@ router.put('/settings', wrap(async (req, res) => {
 router.post('/settings/test-mail', wrap(async (req, res) => {
   await sendMail({ to: req.body.to || req.user.email, subject: 'Prueba de correo', text: 'El correo saliente está configurado correctamente.' });
   res.json({ ok: true });
+}));
+
+// ---------- copias de seguridad ----------
+router.get('/backups', wrap(async (req, res) => res.json({ dir: backup.BACKUP_DIR, list: backup.listBackups() })));
+router.post('/backups', wrap(async (req, res) => {
+  const b = await backup.createBackup('manual');
+  await audit(req, { entity: 'backup', action: 'backup', summary: `Copia de seguridad creada: ${b.name}` });
+  res.status(201).json(b);
+}));
+router.get('/backups/:name', wrap(async (req, res) => {
+  const file = backup.backupPath(req.params.name);
+  await audit(req, { entity: 'backup', action: 'export', summary: `Copia de seguridad descargada: ${req.params.name}` });
+  res.download(file, req.params.name);
+}));
+router.delete('/backups/:name', wrap(async (req, res) => {
+  backup.deleteBackup(req.params.name);
+  await audit(req, { entity: 'backup', action: 'delete', summary: `Copia de seguridad borrada: ${req.params.name}` });
+  res.json({ ok: true });
+}));
+async function doRestore(req, res, buf, label) {
+  const r = await backup.restoreBackup(buf, { force: req.query.force === '1' });
+  await audit(req, { entity: 'backup', action: 'restore', summary: `Restaurada la copia ${label} (del ${r.created_at}). Copia previa: ${r.safety}`, changes: Object.entries(r.counts).map(([k, v]) => ({ field: k, from: '', to: `${v} filas` })) });
+  res.json(r);
+}
+router.post('/backups/:name/restore', wrap(async (req, res) => {
+  const fsMod = require('fs');
+  await doRestore(req, res, fsMod.readFileSync(backup.backupPath(req.params.name)), req.params.name);
+}));
+router.post('/backups-upload', uploadBackup.single('file'), wrap(async (req, res) => {
+  if (!req.file) throw httpError(400, 'Adjunta el archivo de copia (.json.gz)');
+  const name = backup.saveUploaded(req.file.buffer);
+  if (req.query.restore === '1') return doRestore(req, res, req.file.buffer, req.file.originalname);
+  res.status(201).json({ name });
 }));
 
 // ---------- auditoría global ----------

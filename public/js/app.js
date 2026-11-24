@@ -45,7 +45,7 @@ function buildShell() {
   nav = h('nav.nav');
   content = h('main.content');
   const companySel = state.me.companies.length > 1
-    ? h('select.company-select', { onchange: (e) => { state.companyId = Number(e.target.value); localStorage.setItem('companyId', state.companyId); refreshApps().then(route); } },
+    ? h('select.company-select', { onchange: (e) => { state.companyId = Number(e.target.value); localStorage.setItem('companyId', state.companyId); buildShell(); refreshApps().then(route); } },
       state.me.companies.map((c) => h('option', { value: c.id, selected: c.id === state.companyId }, '🏢 ' + c.name)))
     : state.me.companies.length ? h('div.company-select.muted.small', '🏢 ' + state.me.companies[0].name) : h('div.company-select.error.small', 'Sin empresa asignada');
   const initials = state.me.name.split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase();
@@ -57,7 +57,9 @@ function buildShell() {
       h('button.btn.sm.ghost', { title: 'Mi perfil', onclick: () => changePassword(false) }, '⚙ Perfil'),
       h('button.btn.sm.ghost', { title: 'Cambiar tema claro/oscuro', onclick: toggleTheme }, '◐ Tema'),
       h('button.btn.sm.ghost', { title: 'Cerrar sesión', onclick: async () => { await api('/logout', { method: 'POST' }); location.reload(); } }, '⎋ Salir')));
-  const sidebar = h('aside.sidebar', h('div.brand', h('div.logo', 'G'), h('span', state.me.app_name)), companySel, nav, userMenu);
+  const company = state.me.companies.find((c) => c.id === state.companyId);
+  const brandIcon = company && company.has_logo ? h('img.logo-img', { src: `/api/companies/${company.id}/logo?v=${Date.now()}`, alt: '' }) : h('div.logo', 'G');
+  const sidebar = h('aside.sidebar', h('div.brand', brandIcon, h('span', state.me.app_name)), companySel, nav, userMenu);
   const topbar = h('header.topbar', h('button.btn.ghost.icon', { onclick: () => shell.classList.toggle('nav-open') }, '☰'), h('strong', state.me.app_name));
   shell = h('div.shell', sidebar, h('div.backdrop', { onclick: () => shell.classList.remove('nav-open') }), h('div.main', topbar, content));
   clear(root, shell);
