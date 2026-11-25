@@ -510,7 +510,9 @@ export async function renderApp(root, key, onCountsChanged) {
       const body = f.type === 'checkbox' ? h('label.check', { style: { minHeight: '38px' } }, input, 'Sí')
         : extra ? h('div.input-group', input, extra) : input;
       if (f.max_length && ['INPUT', 'TEXTAREA'].includes(input.tagName) && input.type !== 'checkbox') input.maxLength = f.max_length;
-      return h('div.field', { class: 'w-' + ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md'), dataset: { key: f.key } }, label, body, f.help ? h('div.help', f.help) : null);
+      const hgt = ['textarea', 'multiselect'].includes(f.type) ? (f.height || 1) : 1; // altura en filas (diseñador)
+      return h('div.field', { class: 'w-' + ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md') + (hgt > 1 ? ' tall' : ''), dataset: { key: f.key },
+        style: hgt > 1 ? { gridRow: `span ${hgt}` } : {} }, label, body, f.help ? h('div.help', f.help) : null);
     }
 
     function collect() {

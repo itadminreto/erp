@@ -475,6 +475,7 @@ export async function renderAudit(root) {
 
 // ---------- diseñador visual de formularios ----------
 const DZ_WIDTHS = [['xs', 'Muy estrecho', 2], ['sm', 'Estrecho', 3], ['md', 'Medio', 4], ['lg', 'Ancho', 6], ['xl', 'Muy ancho', 8], ['full', 'Fila completa', 12]];
+const DZ_TALL = ['textarea', 'multiselect'];
 const DZ_TYPE_HINT = { text: 'Texto', textarea: 'Texto largo…', number: '123', decimal: '1,50', date: 'dd/mm/aaaa', datetime: 'dd/mm/aaaa hh:mm', email: 'nombre@dominio.com',
   phone: '600 000 000', url: 'https://', select: 'Elegir… ▾', multiselect: 'Elegir varios… ▾', checkbox: '☐ Sí', password: '••••••••  👁 🎲', user: 'Usuario… ▾',
   color: '■', iban: 'ES00 0000 0000 0000 0000 0000', ip: '192.168.1.10' };
@@ -486,6 +487,7 @@ export async function renderFormDesigner(root, appId) {
   const fields = app.fields.filter((f) => f.active);
   const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
   const widths = Object.fromEntries(fields.map((f) => [f.key, ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md')]));
+  const heights = Object.fromEntries(fields.map((f) => [f.key, DZ_TALL.includes(f.type) ? (f.height || 1) : 1]));
   let layout = {};
   try { layout = app.form_layout ? JSON.parse(app.form_layout) : {}; } catch { layout = {}; }
   // grupos iniciales: el primero sin título; los campos no colocados van al final
@@ -504,38 +506,62 @@ export async function renderFormDesigner(root, appId) {
   window.addEventListener('hashchange', offHash);
 
   // ----- tarjeta de campo -----
+  // Tiradores: borde derecho = ancho; borde inferior = alto (filas); esquina = ancho y alto a la vez.
+  // El alto solo se ofrece en texto largo y selección múltiple (en un campo de una línea solo dejaría un hueco).
   function fieldCard(k) {
     const f = byKey[k];
+    const tall = DZ_TALL.includes(f.type);
     const card = h('div.field.dz-field', { dataset: { key: k } });
     const sizeLbl = h('span.dz-size');
+    const hLbl = h('span.dz-size');
     const apply = () => {
-      card.className = `field dz-field w-${widths[k]}`;
+      card.className = `field dz-field w-${widths[k]}${tall && heights[k] > 1 ? ' tall' : ''}`;
+      card.style.gridRow = tall && heights[k] > 1 ? `span ${heights[k]}` : '';
       sizeLbl.textContent = DZ_WIDTHS.find((w) => w[0] === widths[k])[1];
+      hLbl.textContent = `${heights[k]} fila${heights[k] > 1 ? 's' : ''}`;
     };
-    const step = (d) => { const i = DZ_WIDTHS.findIndex((w) => w[0] === widths[k]); const n = Math.min(Math.max(i + d, 0), DZ_WIDTHS.length - 1); if (n !== i) { widths[k] = DZ_WIDTHS[n][0]; apply(); setDirty(); } };
-    const handle = h('div.dz-rs', { title: 'Arrastra para cambiar el ancho' });
-    handle.addEventListener('pointerdown', (e) => {
-      if (canvas.classList.contains('mobile')) return toast('Cambia los anchos en la vista de ordenador: en el móvil se ajustan solos.');
+    const stepW = (d) => { const i = DZ_WIDTHS.findIndex((w) => w[0] === widths[k]); const n = Math.min(Math.max(i + d, 0), DZ_WIDTHS.length - 1); if (n !== i) { widths[k] = DZ_WIDTHS[n][0]; apply(); setDirty(); } };
+    const stepH = (d) => { const n = Math.min(Math.max(heights[k] + d, 1), 8); if (n !== heights[k]) { heights[k] = n; apply(); setDirty(); } };
+
+    const startResize = (mode) => (e) => {
+      if (canvas.classList.contains('mobile') && mode !== 'y') return toast('Cambia los anchos en la vista de ordenador: en el móvil se ajustan solos.');
       e.preventDefault(); e.stopPropagation();
+      const handle = e.currentTarget;
       handle.setPointerCapture(e.pointerId);
-      const grid = card.parentElement.getBoundingClientRect();
-      const gap = parseFloat(getComputedStyle(card.parentElement).columnGap) || 0;
-      const col = (grid.width - gap * 11) / 12;
-      const left = card.getBoundingClientRect().left;
+      const gridEl = card.parentElement;
+      const grid = gridEl.getBoundingClientRect();
+      const cs = getComputedStyle(gridEl);
+      const gapX = parseFloat(cs.columnGap) || 0, gapY = parseFloat(cs.rowGap) || 0;
+      const col = (grid.width - gapX * 11) / 12;
+      const rect = card.getBoundingClientRect();
+      const rowUnit = (rect.height + gapY) / heights[k] - gapY; // alto de una fila según el tamaño actual
       card.classList.add('resizing');
       const move = (ev) => {
-        const span = Math.min(Math.max(Math.round((ev.clientX - left + gap) / (col + gap)), 1), 12);
-        const best = DZ_WIDTHS.reduce((a, b) => (Math.abs(b[2] - span) < Math.abs(a[2] - span) ? b : a));
-        if (best[0] !== widths[k]) { widths[k] = best[0]; apply(); setDirty(); }
+        let changed = false;
+        if (mode !== 'y') {
+          const span = Math.min(Math.max(Math.round((ev.clientX - rect.left + gapX) / (col + gapX)), 1), 12);
+          const best = DZ_WIDTHS.reduce((x, y) => (Math.abs(y[2] - span) < Math.abs(x[2] - span) ? y : x));
+          if (best[0] !== widths[k]) { widths[k] = best[0]; changed = true; }
+        }
+        if (mode !== 'x') {
+          const rows = Math.min(Math.max(Math.round((ev.clientY - rect.top + gapY) / (rowUnit + gapY)), 1), 8);
+          if (rows !== heights[k]) { heights[k] = rows; changed = true; }
+        }
+        if (changed) { apply(); setDirty(); }
       };
       const up = () => { card.classList.remove('resizing'); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); };
       handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up);
-    });
+    };
+    const hx = h('div.dz-rs', { title: 'Arrastra para cambiar el ancho' }); hx.addEventListener('pointerdown', startResize('x'));
+    const hy = tall ? h('div.dz-rs-y', { title: 'Arrastra para cambiar el alto' }) : null; if (hy) hy.addEventListener('pointerdown', startResize('y'));
+    const hxy = tall ? h('div.dz-rs-xy', { title: 'Arrastra para cambiar ancho y alto' }) : null; if (hxy) hxy.addEventListener('pointerdown', startResize('xy'));
     card.append(
       h('label', h('span.dz-grip', '⋮⋮'), f.label, f.required ? h('span.req', '*') : null),
-      h('div.dz-fake', { class: f.type === 'textarea' ? 'tall' : '' }, DZ_TYPE_HINT[f.type] || types[f.type] || f.type),
-      h('div.dz-tools', h('button', { type: 'button', title: 'Más estrecho', onclick: () => step(-1) }, '−'), sizeLbl, h('button', { type: 'button', title: 'Más ancho', onclick: () => step(1) }, '+')),
-      handle);
+      h('div.dz-fake', { class: tall ? 'tall' : '' }, DZ_TYPE_HINT[f.type] || types[f.type] || f.type),
+      h('div.dz-tools',
+        h('button', { type: 'button', title: 'Más estrecho', onclick: () => stepW(-1) }, '−'), sizeLbl, h('button', { type: 'button', title: 'Más ancho', onclick: () => stepW(1) }, '+'),
+        tall ? [h('span.dz-sep', '↕'), h('button', { type: 'button', title: 'Más bajo', onclick: () => stepH(-1) }, '−'), hLbl, h('button', { type: 'button', title: 'Más alto', onclick: () => stepH(1) }, '+')] : null),
+      ...[hx, hy, hxy].filter(Boolean)); // (append del DOM: sin nulos, que se pintarían como «null»)
     apply();
     return card;
   }
@@ -543,7 +569,7 @@ export async function renderFormDesigner(root, appId) {
   // ----- secciones -----
   const mkGrid = (keys) => {
     const g = h('div.form-grid.dz-grid', keys.map(fieldCard));
-    sortable(g, { group: 'dz-fields', draggable: '.dz-field', filter: '.dz-rs, .dz-tools button', preventOnFilter: false, emptyInsertThreshold: 40, onEnd: setDirty, onAdd: setDirty });
+    sortable(g, { group: 'dz-fields', draggable: '.dz-field', filter: '.dz-rs, .dz-rs-y, .dz-rs-xy, .dz-tools button', preventOnFilter: false, emptyInsertThreshold: 40, onEnd: setDirty, onAdd: setDirty });
     return g;
   };
   function sectionEl(title, keys) {
@@ -584,14 +610,14 @@ export async function renderFormDesigner(root, appId) {
       items.push(...[...sec.querySelector('.dz-grid').children].map((c) => c.dataset.key));
     }
     try {
-      await api(`/admin/apps/${app.id}/design`, { method: 'PUT', body: { items, widths, tabs: tabsCb.checked } });
+      await api(`/admin/apps/${app.id}/design`, { method: 'PUT', body: { items, widths, heights, tabs: tabsCb.checked } });
       dirty = false; saveBtn.disabled = true; status.textContent = 'Guardado ✔';
       toast('Diseño guardado: ya se aplica al formulario de ' + app.name, 'ok');
     } catch (e) { toastErr(e); }
   }
 
   clear(root,
-    head(`🎨 Diseño del formulario · ${app.name}`, 'Arrastra los campos para colocarlos, tira del borde derecho de un campo para cambiar su ancho y agrupa con secciones.',
+    head(`🎨 Diseño del formulario · ${app.name}`, 'Arrastra los campos para colocarlos; tira del borde derecho (ancho), del inferior (alto) o de la esquina (ambos) para cambiar su tamaño, y agrupa con secciones.',
       h('a.btn', { href: '#/admin/apps' }, '← Volver'), saveBtn),
     h('div.toolbar',
       h('button.btn', { onclick: () => { const s = sectionEl('Nueva sección', []); sectionsBox.append(s); s.querySelector('.dz-title').select(); setDirty(); s.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }, '＋ Añadir sección'),

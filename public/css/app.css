@@ -176,7 +176,10 @@ table.data .cb { width: 1%; }
 
 /* formulario dinámico: 12 columnas; el nº de campos por fila depende del ancho disponible */
 .modal-body { container-type: inline-size; }
-.form-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 18px 20px; }
+.form-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: minmax(54px, auto); gap: 18px 20px; }
+/* campos altos (texto largo, selección múltiple): el control ocupa todo el alto disponible */
+.form-grid .field.tall textarea, .form-grid .field.tall select[multiple] { flex: 1; min-height: 0; height: auto; }
+.form-grid .field.tall .input-group { flex: 1; }
 .form-grid > .field { grid-column: span 6; }
 /* Anchos (de 12 columnas). Pantalla media (561–899 px de formulario): */
 .form-grid .w-xs { grid-column: span 3; }   /* 4 por fila */
@@ -327,3 +330,14 @@ input.invalid { border-color: var(--danger); outline-color: color-mix(in srgb, v
 .dz-sec-grip { cursor: grab; color: var(--muted); font-size: 18px; padding: 0 2px; user-select: none; letter-spacing: -2px; }
 .dz-title { border: 1px dashed transparent; background: none; font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--primary); max-width: 420px; }
 .dz-title:hover, .dz-title:focus { border-color: var(--border); background: var(--surface); }
+/* diseñador: tiradores vertical y diagonal, y campos altos */
+.dz-field.tall { display: flex; flex-direction: column; }
+.dz-field.tall .dz-fake.tall { flex: 1; }
+.dz-fake.tall { white-space: normal; }
+.dz-rs-y { position: absolute; left: 12px; right: 12px; bottom: -5px; height: 10px; cursor: ns-resize; touch-action: none; }
+.dz-rs-y::after { content: ""; position: absolute; top: 3px; left: 50%; transform: translateX(-50%); width: 28px; height: 4px; border-radius: 2px; background: var(--primary); opacity: 0; transition: opacity .12s; }
+.dz-rs-xy { position: absolute; right: -5px; bottom: -5px; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; }
+.dz-rs-xy::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 9px; height: 9px; border-right: 3px solid var(--primary); border-bottom: 3px solid var(--primary); border-bottom-right-radius: 3px; opacity: 0; transition: opacity .12s; }
+.dz-field:hover .dz-rs-y::after, .dz-field:hover .dz-rs-xy::after, .dz-field.resizing .dz-rs-y::after, .dz-field.resizing .dz-rs-xy::after { opacity: 1; }
+.dz-canvas.mobile .dz-rs-xy { display: none; }
+.dz-sep { margin-left: 8px; }

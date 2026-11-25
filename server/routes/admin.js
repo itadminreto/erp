@@ -351,7 +351,7 @@ router.put('/apps/:id/design', wrap(async (req, res) => {
   if (!app) throw httpError(404, 'Aplicación no encontrada');
   const fields = await appFields(app.id, true);
   const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
-  const { items = [], widths = {}, tabs = false } = req.body || {};
+  const { items = [], widths = {}, heights = {}, tabs = false } = req.body || {};
   if (!Array.isArray(items) || items.length > 500) throw httpError(400, 'Diseño no válido');
   const clean = []; const seen = new Set(); let sections = 0;
   for (const it of items) {
@@ -365,7 +365,9 @@ router.put('/apps/:id/design', wrap(async (req, res) => {
     const order = [...clean.filter((x) => typeof x === 'string'), ...fields.map((f) => f.key).filter((k) => !seen.has(k))];
     for (const [i, k] of order.entries()) {
       const w = widths[k];
-      await run(`UPDATE fields SET sort = ?${WIDTHS.includes(w) ? ', width = ?' : ''} WHERE id = ?`, ...(WIDTHS.includes(w) ? [i, w] : [i]), byKey[k].id);
+      const hv = TALL_TYPES.includes(byKey[k].type) && heights[k] !== undefined ? Math.min(Math.max(Math.round(Number(heights[k])) || 1, 1), 8) : null;
+      await run(`UPDATE fields SET sort = ?${WIDTHS.includes(w) ? ', width = ?' : ''}${hv ? ', height = ?' : ''} WHERE id = ?`,
+        i, ...(WIDTHS.includes(w) ? [w] : []), ...(hv ? [hv] : []), byKey[k].id);
     }
     await run('UPDATE apps SET form_layout = ? WHERE id = ?', JSON.stringify({ tabs: bool(tabs) === 1, items: clean }), app.id);
   });
@@ -380,12 +382,14 @@ router.put('/apps-order', wrap(async (req, res) => {
 }));
 
 const WIDTHS = ['xs', 'sm', 'md', 'lg', 'xl', 'full'];
+const TALL_TYPES = ['textarea', 'multiselect']; // tipos que admiten altura (más líneas / opciones visibles)
 function fieldData(b, isNew) {
-  const d = pick(b, ['label', 'type', 'required', 'unique_value', 'show_in_list', 'width', 'help', 'active', 'max_length']);
+  const d = pick(b, ['label', 'type', 'required', 'unique_value', 'show_in_list', 'width', 'help', 'active', 'max_length', 'height']);
   if ((isNew || 'label' in d) && !String(d.label || '').trim()) throw httpError(400, 'La etiqueta es obligatoria');
   if ('type' in d && !FIELD_TYPES[d.type]) throw httpError(400, 'Tipo de campo no válido');
   for (const k of ['required', 'unique_value', 'show_in_list', 'active']) if (k in d) d[k] = bool(d[k]);
   if ('width' in d) d.width = ({ half: 'md', third: 'sm' })[d.width] || (WIDTHS.includes(d.width) ? d.width : 'md');
+  if ('height' in d) d.height = Math.min(Math.max(Math.round(Number(d.height)) || 1, 1), 8);
   if ('max_length' in d) {
     const n = Number(d.max_length);
     if (d.max_length === '' || d.max_length === null || !n) d.max_length = null;

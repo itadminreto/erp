@@ -12,7 +12,7 @@ const FIELD_TYPES = {
 function parseField(f) {
   let options = {};
   try { options = f.options ? JSON.parse(f.options) : {}; } catch { options = {}; }
-  return { ...f, options, max_length: f.max_length ? Number(f.max_length) : null, required: !!f.required, unique_value: !!f.unique_value, show_in_list: !!f.show_in_list, active: !!f.active };
+  return { ...f, options, max_length: f.max_length ? Number(f.max_length) : null, height: Math.min(Math.max(Number(f.height) || 1, 1), 8), required: !!f.required, unique_value: !!f.unique_value, show_in_list: !!f.show_in_list, active: !!f.active };
 }
 async function appFields(appId, includeInactive = false) {
   return (await all(`SELECT * FROM fields WHERE app_id = ? ${includeInactive ? '' : 'AND active = 1'} ORDER BY sort, id`, appId)).map(parseField);

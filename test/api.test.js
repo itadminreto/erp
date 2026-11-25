@@ -372,3 +372,17 @@ test('diseñador de formularios: secciones, orden, anchos y pestañas', async ()
   const ana = client(); await ana.login('ana@test.com', 'anapass123');
   assert.equal((await ana.call('PUT', `/admin/apps/${veh.id}/design`, { items: [] })).status, 403, 'solo super admin');
 });
+
+test('diseñador: altura en filas solo para texto largo y selección múltiple', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const cred = apps.find((a) => a.key === 'credenciales');
+  const items = cred.fields.map((f) => f.key);
+  const r = await admin.call('PUT', `/admin/apps/${cred.id}/design`, { items, widths: { notas: 'md' }, heights: { notas: 3, servicio: 4, usuario: 99 } });
+  assert.equal(r.status, 200);
+  const f = Object.fromEntries((await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'credenciales').fields.map((x) => [x.key, x]));
+  assert.deepEqual([f.notas.height, f.notas.width], [3, 'md'], 'texto largo admite altura');
+  assert.equal(f.servicio.height, 1, 'un campo de una línea no cambia de altura');
+  await admin.call('PUT', `/admin/apps/${cred.id}/design`, { items, heights: { notas: 99 } });
+  const n = (await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'credenciales').fields.find((x) => x.key === 'notas');
+  assert.equal(n.height, 8, 'máximo 8 filas');
+});
