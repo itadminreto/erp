@@ -1,7 +1,7 @@
 // Arranque, inicio de sesión, menú lateral y enrutado.
 import { api, h, clear, toast, toastErr, state, modal } from './core.js';
 import { renderApp } from './records.js';
-import { renderCompanies, renderCenters, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit } from './admin.js';
+import { renderCompanies, renderCenters, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit, renderFormDesigner } from './admin.js';
 
 const root = document.getElementById('root');
 let shell = null, nav = null, content = null;
@@ -92,7 +92,7 @@ function drawNav() {
 
 async function route() {
   const hash = location.hash.replace(/^#\/?/, '');
-  const [a, b] = hash.split('/');
+  const [a, b, c] = hash.split('/');
   drawNav();
   clear(content, h('p.muted', 'Cargando…'));
   try {
@@ -100,7 +100,7 @@ async function route() {
     if (a === 'admin' && state.me.is_superadmin) {
       const refreshAll = async () => { state.me = await api('/me'); buildShell(); await refreshApps(); route(); };
       const views = { companies: () => renderCompanies(content, refreshAll), centers: () => renderCenters(content), users: () => renderUsers(content), roles: () => renderRoles(content),
-        apps: () => renderAppsAdmin(content, refreshApps), settings: () => renderSettings(content), audit: () => renderAudit(content) };
+        apps: () => renderAppsAdmin(content, refreshApps), design: () => renderFormDesigner(content, c), settings: () => renderSettings(content), audit: () => renderAudit(content) };
       if (views[b]) return await views[b]();
     }
     renderHome();

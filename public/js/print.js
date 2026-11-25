@@ -19,6 +19,7 @@ const CSS = `
   tr { page-break-inside: avoid; }
   .ficha th { width: 32%; background: #f4f4f4; }
   .ficha td { white-space: pre-wrap; }
+  .ficha th.sec { width: auto; background: #ddd; text-transform: uppercase; font-size: 8.5pt; letter-spacing: .05em; padding-top: 6px; }
   .firma { display: flex; gap: 30px; margin-top: 40px; }
   .firma div { flex: 1; border-top: 1px solid #333; padding-top: 4px; font-size: 9pt; color: #444; }
   .cal th { text-align: center; }

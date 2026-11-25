@@ -285,3 +285,45 @@ table.data .cb { width: 1%; }
 .form-section { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--primary); margin: 8px 0 -4px; padding-top: 10px; border-top: 1px solid var(--border); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86rem; }
 input.invalid { border-color: var(--danger); outline-color: color-mix(in srgb, var(--danger) 35%, transparent); background: var(--danger-bg); }
+
+/* ---------- secciones del formulario ---------- */
+.form-section-title { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--primary); margin: 22px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.form-subtabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 18px 0 14px; border-bottom: 1px solid var(--border); }
+.form-subtabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 7px 12px; font: inherit; color: var(--muted); cursor: pointer; }
+.form-subtabs button.active { color: var(--primary); border-color: var(--primary); font-weight: 600; }
+
+/* ---------- diseñador visual de formularios ---------- */
+.dz-stage { background: repeating-linear-gradient(45deg, transparent 0 10px, color-mix(in srgb, var(--border) 35%, transparent) 10px 11px); border-radius: var(--radius); padding: 22px; overflow: auto; }
+.dz-paper { max-width: 1100px; margin: 0 auto; padding: 0 0 22px; transition: max-width .25s; }
+.dz-paper:has(.dz-canvas.mobile) { max-width: 390px; }
+.dz-paper-head { display: flex; gap: 10px; align-items: center; padding: 14px 22px; border-bottom: 1px solid var(--border); font-size: 1.05rem; }
+.dz-canvas { container-type: inline-size; padding: 14px 22px 0; }
+.dz-top-hint { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 4px 0 8px; }
+.dz-grid { min-height: 64px; padding: 8px; border: 1.5px dashed transparent; border-radius: 10px; transition: border-color .15s; }
+.dz-grid:empty { border-color: var(--border); }
+.dz-grid:empty::after { content: "Arrastra campos aquí"; grid-column: span 12; color: var(--muted); font-size: .85rem; text-align: center; align-self: center; }
+.dz-grid:hover { border-color: color-mix(in srgb, var(--primary) 30%, transparent); }
+.dz-field { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 14px 8px 10px; cursor: grab; transition: box-shadow .12s, border-color .12s; }
+.dz-field:hover { border-color: var(--primary); box-shadow: 0 2px 10px rgba(79,70,229,.12); }
+.dz-field.sortable-ghost { opacity: .35; }
+.dz-field.sortable-chosen { box-shadow: 0 8px 24px rgba(16,24,40,.18); }
+.dz-field.resizing { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-2); }
+.dz-field > label { cursor: grab; }
+.dz-grip { color: var(--muted); margin-right: 4px; letter-spacing: -2px; }
+.dz-fake { border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; min-height: 32px; color: var(--muted); font-size: .85rem; background: var(--surface-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dz-fake.tall { min-height: 56px; }
+.dz-tools { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: .72rem; color: var(--muted); opacity: 0; transition: opacity .12s; }
+.dz-field:hover .dz-tools, .dz-field.resizing .dz-tools { opacity: 1; }
+.dz-tools button { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; font: inherit; line-height: 1; color: var(--text); }
+.dz-size { flex: 1; text-align: center; }
+.dz-rs { position: absolute; top: 6px; bottom: 6px; right: -5px; width: 10px; cursor: ew-resize; border-radius: 5px; touch-action: none; }
+.dz-rs::after { content: ""; position: absolute; left: 3px; top: 50%; transform: translateY(-50%); width: 4px; height: 28px; border-radius: 2px; background: var(--primary); opacity: 0; transition: opacity .12s; }
+.dz-field:hover .dz-rs::after, .dz-field.resizing .dz-rs::after { opacity: 1; }
+.dz-canvas.mobile .dz-rs { display: none; }
+.dz-sections { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.dz-section { border-top: 1px solid var(--border); padding-top: 10px; }
+.dz-section.sortable-ghost { opacity: .4; }
+.dz-sec-head { display: flex; align-items: center; gap: 8px; }
+.dz-sec-grip { cursor: grab; color: var(--muted); font-size: 18px; padding: 0 2px; user-select: none; letter-spacing: -2px; }
+.dz-title { border: 1px dashed transparent; background: none; font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--primary); max-width: 420px; }
+.dz-title:hover, .dz-title:focus { border-color: var(--border); background: var(--surface); }

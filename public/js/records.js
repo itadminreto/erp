@@ -148,13 +148,14 @@ export async function renderApp(root, key, onCountsChanged) {
     } catch (e) { toastErr(e); }
   }
   function printRecord(rec) {
-    let order = (meta.layouts.form && meta.layouts.form.order) || meta.fields.map((f) => f.key);
-    order = [...order.filter((k) => fieldsByKey[k]), ...meta.fields.map((f) => f.key).filter((k) => !order.includes(k))];
-    const rows = [['Centro', rec.center_name ? `${rec.center_code ? rec.center_code + ' · ' : ''}${rec.center_name}` : '—'],
-      ...order.map((k) => [fieldsByKey[k].label, cellText(rec, k) || '—'])];
+    const rows = [['Centro', rec.center_name ? `${rec.center_code ? rec.center_code + ' · ' : ''}${rec.center_name}` : '—']];
+    for (const g of formGroups().groups) {
+      if (g.title) rows.push([null, g.title]);
+      for (const k of g.keys) rows.push([fieldsByKey[k].label, cellText(rec, k) || '—']);
+    }
     const firma = key === 'recados'
       ? '<div class="firma"><div>Entregado por</div><div>Recibido por</div><div>Fecha y firma de realización</div></div>' : '';
-    const body = `<table class="ficha"><tbody>${rows.map(([l, v]) => `<tr><th>${esc(l)}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>
+    const body = `<table class="ficha"><tbody>${rows.map(([l, v]) => (l === null ? `<tr><th colspan="2" class="sec">${esc(v)}</th></tr>` : `<tr><th>${esc(l)}</th><td>${esc(v)}</td></tr>`)).join('')}</tbody></table>
       <footer>#${rec.id} · Creado ${esc(fmtDateTime(rec.created_at))}${rec.created_by_name ? ' por ' + esc(rec.created_by_name) : ''} · Modificado ${esc(fmtDateTime(rec.updated_at))}${rec.deleted_at ? ' · EN LA PAPELERA' : ''}</footer>${firma}`;
     printDoc({ title: String(rec.data[meta.app.title_field] || `${meta.app.name} #${rec.id}`), subtitle: meta.app.name, bodyHtml: body });
   }
@@ -398,25 +399,60 @@ export async function renderApp(root, key, onCountsChanged) {
     });
   }
 
+  // ----- secciones del formulario -----
+  /**
+   * Grupos de campos según el diseño de la app (super admin). El primer grupo no tiene título (campos antes de
+   * cualquier sección). Dentro de cada sección se aplica el orden personal del usuario («Mover campos»).
+   */
+  function formGroups() {
+    let layout = {};
+    try { layout = meta.app.form_layout ? JSON.parse(meta.app.form_layout) : {}; } catch { layout = {}; }
+    const groups = [{ title: null, keys: [] }];
+    const seen = new Set();
+    for (const it of Array.isArray(layout.items) ? layout.items : []) {
+      if (it && typeof it === 'object' && 'section' in it) groups.push({ title: String(it.section || 'Sección'), keys: [] });
+      else if (typeof it === 'string' && fieldsByKey[it] && !seen.has(it)) { groups[groups.length - 1].keys.push(it); seen.add(it); }
+    }
+    groups[groups.length - 1].keys.push(...meta.fields.map((f) => f.key).filter((k) => !seen.has(k))); // campos nuevos, al final
+    const uo = meta.layouts.form && meta.layouts.form.order;
+    if (Array.isArray(uo)) {
+      const idx = Object.fromEntries(uo.map((k, i) => [k, i]));
+      for (const g of groups) g.keys = g.keys.map((k, i) => [k, idx[k] ?? 1e6 + i]).sort((a, b) => a[1] - b[1]).map((x) => x[0]);
+    }
+    return { groups: groups.filter((g) => g.keys.length), tabs: !!layout.tabs };
+  }
+
   // ----- formulario de registro -----
   async function openRecord(rec, prefill = {}) {
     if (rec) { try { rec = await api(`/apps/${key}/records/${rec.id}`); } catch (e) { return toastErr(e); } }
     const isNew = !rec;
     const editable = isNew ? P.create : rec.can.edit;
     const inputs = {}; const dirtyPw = new Set();
-    let formOrder = (meta.layouts.form && meta.layouts.form.order) || meta.fields.map((f) => f.key);
-    formOrder = [...formOrder.filter((k) => fieldsByKey[k]), ...meta.fields.map((f) => f.key).filter((k) => !formOrder.includes(k))];
 
     const centerOpts = meta.centers.filter((c) => (isNew ? c.can_create : true) || (rec && rec.center_id === c.id));
     const centerSelect = h('select', { disabled: !editable },
       (isNew ? meta.can_create_without_center : true) ? h('option', { value: '' }, '— Sin centro —') : null,
       centerOpts.map((c) => h('option', { value: c.id, selected: rec ? rec.center_id === c.id : String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
 
-    const grid = h('div.form-grid');
     const fieldEls = {};
     for (const f of meta.fields) fieldEls[f.key] = buildField(f);
-    const drawGrid = () => clear(grid, formOrder.map((k) => fieldEls[k]));
-    drawGrid();
+    // una rejilla por sección; en modo pestañas, una pestaña por sección con título
+    const { groups, tabs: asTabs } = formGroups();
+    const grids = groups.map(() => h('div.form-grid'));
+    const drawGrids = (gs) => gs.forEach((g, i) => clear(grids[i], g.keys.map((k) => fieldEls[k])));
+    drawGrids(groups);
+    const titled = groups.map((g, i) => ({ g, i })).filter((x) => x.g.title);
+    let showSection = () => {};
+    let formBody;
+    if (asTabs && titled.length >= 2) {
+      const btns = titled.map(({ g, i }) => h('button', { type: 'button', onclick: () => showSection(i) }, g.title));
+      const panes = titled.map(({ i }) => h('div.sec-pane', grids[i]));
+      showSection = (i) => titled.forEach((t, n) => { const on = t.i === i; btns[n].classList.toggle('active', on); panes[n].hidden = !on; });
+      formBody = [groups[0].title ? null : grids[0], h('div.form-subtabs', btns), panes];
+      showSection(titled[0].i);
+    } else {
+      formBody = groups.map((g, i) => [g.title ? h('h3.form-section-title', g.title) : null, grids[i]]);
+    }
 
     function buildField(f) {
       const v = rec ? rec.data[f.key] : (f.key in prefill ? prefill[f.key] : (f.type === 'checkbox' ? false : ''));
@@ -492,20 +528,20 @@ export async function renderApp(root, key, onCountsChanged) {
     // diseño del formulario (por usuario)
     let sorter = null;
     const designBtn = h('button.btn.sm', { title: 'Mover campos', onclick: () => {
-      const on = !grid.classList.contains('designing');
-      grid.classList.toggle('designing', on);
+      const on = !grids[0].classList.contains('designing');
+      grids.forEach((g) => g.classList.toggle('designing', on));
       designBtn.textContent = on ? '✔ Guardar diseño' : '✥ Mover campos';
       resetBtn.hidden = !on;
-      if (on) sorter = sortable(grid, { draggable: '.field' });
+      if (on) sorter = grids.map((g, i) => sortable(g, { draggable: '.field', group: 'sec' + i })); // cada campo dentro de su sección
       else {
-        sorter && sorter.destroy(); sorter = null;
-        formOrder = [...grid.children].map((el) => el.dataset.key);
+        (sorter || []).forEach((x) => x && x.destroy()); sorter = null;
+        const formOrder = grids.flatMap((g) => [...g.children].map((el) => el.dataset.key));
         meta.layouts.form = { order: formOrder };
         api(`/apps/${key}/layout/form`, { method: 'PUT', body: { order: formOrder } }).then(() => toast('Diseño guardado', 'ok')).catch(toastErr);
       }
     } }, '✥ Mover campos');
     const resetBtn = h('button.btn.sm.ghost', { hidden: true, onclick: async () => {
-      formOrder = meta.fields.map((f) => f.key); meta.layouts.form = null; drawGrid();
+      meta.layouts.form = null; drawGrids(formGroups().groups);
       await api(`/apps/${key}/layout/form`, { method: 'PUT', body: { reset: true } }).catch(toastErr);
     } }, 'Restablecer');
 
@@ -514,7 +550,7 @@ export async function renderApp(root, key, onCountsChanged) {
       h('div.form-top',
         meta.centers.length ? h('div.field', h('label', 'Centro de trabajo / coste'), centerSelect) : null,
         h('div.design-tools.desktop-only', designBtn, resetBtn)),
-      grid,
+      formBody,
       rec ? h('div.meta-line', h('span', `#${rec.id}`), h('span', `Creado ${fmtDateTime(rec.created_at)}${rec.created_by_name ? ' por ' + rec.created_by_name : ''}`),
         h('span', `Modificado ${fmtDateTime(rec.updated_at)}${rec.updated_by_name ? ' por ' + rec.updated_by_name : ''}`)) : null);
     const historyPane = h('div', { hidden: true });
@@ -549,7 +585,11 @@ export async function renderApp(root, key, onCountsChanged) {
           else await api(`/apps/${key}/records/${rec.id}`, { method: 'PUT', body });
           toast(isNew ? 'Registro creado' : 'Cambios guardados', 'ok');
           m.close(); load(); onCountsChanged && onCountsChanged();
-        } catch (e) { toastErr(e); saveBtn.disabled = false; }
+        } catch (e) {
+          toastErr(e); saveBtn.disabled = false;
+          const bad = groups.findIndex((g) => g.keys.some((k) => e.message.includes(fieldsByKey[k].label + ':')));
+          if (bad >= 0) showSection(bad);
+        }
       } }, isNew ? 'Crear' : 'Guardar');
       footer.push(saveBtn);
     }

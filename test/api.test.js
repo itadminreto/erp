@@ -352,3 +352,23 @@ test('tipo de campo Dirección IP: validación, normalización y orden', async (
   const ips = asc.body.rows.map((r) => r.data.ip_fija);
   assert.deepEqual(ips.slice(0, 3), ['10.0.0.0/24', '192.168.1.2', '192.168.1.10'], 'orden numérico, no alfabético');
 });
+
+test('diseñador de formularios: secciones, orden, anchos y pestañas', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const veh = apps.find((a) => a.key === 'vehiculos');
+  const r = await admin.call('PUT', `/admin/apps/${veh.id}/design`, {
+    items: ['matricula', 'marca', { section: '  Seguro  ' }, 'seguro_compania', 'seguro_poliza', 'no_existe', 'marca', { section: '' }, 'itv_proxima'],
+    widths: { matricula: 'sm', seguro_poliza: 'lg', marca: 'enorme' }, tabs: true,
+  });
+  assert.equal(r.status, 200);
+  const after = (await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'vehiculos');
+  const layout = JSON.parse(after.form_layout);
+  assert.deepEqual(layout, { tabs: true, items: ['matricula', 'marca', { section: 'Seguro' }, 'seguro_compania', 'seguro_poliza', { section: 'Sección' }, 'itv_proxima'] },
+    'limpia claves desconocidas, duplicados y títulos vacíos');
+  const f = Object.fromEntries(after.fields.map((x) => [x.key, x]));
+  assert.equal(f.matricula.width, 'sm'); assert.equal(f.seguro_poliza.width, 'lg'); assert.notEqual(f.marca.width, 'enorme');
+  assert.ok(f.matricula.sort < f.seguro_compania.sort && f.seguro_compania.sort < f.itv_proxima.sort, 'el orden del diseño se guarda');
+  assert.equal((await admin.call('GET', '/apps/vehiculos')).body.app.form_layout, after.form_layout, 'el formulario recibe el diseño');
+  const ana = client(); await ana.login('ana@test.com', 'anapass123');
+  assert.equal((await ana.call('PUT', `/admin/apps/${veh.id}/design`, { items: [] })).status, 403, 'solo super admin');
+});

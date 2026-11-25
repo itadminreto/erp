@@ -342,6 +342,38 @@ router.put('/apps/:id', wrap(async (req, res) => {
   if (changes.length) await audit(req, { entity: 'apps', entityId: before.id, action: 'update', summary: `Aplicación ${before.name}`, changes });
   res.json({ ok: true });
 }));
+/**
+ * Diseño del formulario de una app (diseñador visual): orden de campos, secciones, anchos y modo pestañas.
+ * body: { items: ['campo', { section: 'Título' }, 'campo2', ...], widths: { campo: 'md' }, tabs: bool }
+ */
+router.put('/apps/:id/design', wrap(async (req, res) => {
+  const app = await get('SELECT * FROM apps WHERE id = ?', Number(req.params.id));
+  if (!app) throw httpError(404, 'Aplicación no encontrada');
+  const fields = await appFields(app.id, true);
+  const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
+  const { items = [], widths = {}, tabs = false } = req.body || {};
+  if (!Array.isArray(items) || items.length > 500) throw httpError(400, 'Diseño no válido');
+  const clean = []; const seen = new Set(); let sections = 0;
+  for (const it of items) {
+    if (it && typeof it === 'object' && 'section' in it) {
+      const title = String(it.section || '').trim().slice(0, 80) || 'Sección';
+      if (++sections > 50) throw httpError(400, 'Demasiadas secciones (máx. 50)');
+      clean.push({ section: title });
+    } else if (typeof it === 'string' && byKey[it] && !seen.has(it)) { clean.push(it); seen.add(it); }
+  }
+  await tx(async () => {
+    const order = [...clean.filter((x) => typeof x === 'string'), ...fields.map((f) => f.key).filter((k) => !seen.has(k))];
+    for (const [i, k] of order.entries()) {
+      const w = widths[k];
+      await run(`UPDATE fields SET sort = ?${WIDTHS.includes(w) ? ', width = ?' : ''} WHERE id = ?`, ...(WIDTHS.includes(w) ? [i, w] : [i]), byKey[k].id);
+    }
+    await run('UPDATE apps SET form_layout = ? WHERE id = ?', JSON.stringify({ tabs: bool(tabs) === 1, items: clean }), app.id);
+  });
+  await audit(req, { entity: 'apps', entityId: app.id, appId: app.id, action: 'update',
+    summary: `Diseño del formulario de ${app.name}: ${sections} sección/es${bool(tabs) ? ', en pestañas' : ''}` });
+  res.json({ ok: true });
+}));
+
 router.put('/apps-order', wrap(async (req, res) => {
   await tx(async () => { for (const [i, id] of (req.body.ids || []).entries()) await run('UPDATE apps SET sort = ? WHERE id = ?', i, Number(id)); });
   res.json({ ok: true });

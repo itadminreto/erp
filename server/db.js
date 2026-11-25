@@ -287,6 +287,7 @@ async function init() {
 // Cambios de estructura posteriores a la primera versión (idempotentes).
 const MIGRATIONS = [
   'ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo MEDIUMTEXT NULL',
+  'ALTER TABLE apps ADD COLUMN IF NOT EXISTS form_layout LONGTEXT NULL', // diseño del formulario (secciones, pestañas)
   'ALTER TABLE centers ADD COLUMN IF NOT EXISTS extra LONGTEXT NULL',
   'ALTER TABLE companies ADD COLUMN IF NOT EXISTS extra LONGTEXT NULL',
 ];
