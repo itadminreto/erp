@@ -1,5 +1,6 @@
 // Arranque, inicio de sesión, menú lateral y enrutado.
-import { api, h, clear, toast, toastErr, state, modal } from './core.js';
+import { api, h, clear, toast, toastErr, state, modal, announce } from './core.js';
+import { startA11y, getPrefs, setPrefs } from './a11y.js';
 import { renderApp } from './records.js';
 import { renderCompanies, renderCenters, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit, renderFormDesigner } from './admin.js';
 
@@ -7,6 +8,7 @@ const root = document.getElementById('root');
 let shell = null, nav = null, content = null;
 
 try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch { /* sin almacenamiento */ }
+startA11y();
 
 async function boot() {
   try {
@@ -26,7 +28,7 @@ async function boot() {
 function renderLogin() {
   const email = h('input', { type: 'email', autocomplete: 'username', placeholder: 'usuario@empresa.com', required: true });
   const pass = h('input', { type: 'password', autocomplete: 'current-password', required: true });
-  const err = h('p.error', { hidden: true });
+  const err = h('p.error', { hidden: true, role: 'alert' });
   const btn = h('button.btn.primary.block', { type: 'submit' }, 'Entrar');
   document.body.classList.add('center-page');
   clear(root, h('form.card.login-card', {
@@ -35,15 +37,17 @@ function renderLogin() {
       try { await api('/login', { method: 'POST', body: { email: email.value, password: pass.value } }); document.body.classList.remove('center-page'); location.hash = '#/'; boot(); }
       catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     },
-  }, h('div.brand', { style: { padding: 0 } }, h('div.logo', 'G'), 'Gestión de Aplicaciones'),
+  }, h('h1.brand', { style: { padding: 0 } }, h('div.logo', 'G'), 'Gestión de Aplicaciones'),
   h('p.muted', 'Accede con tu usuario corporativo.'),
   h('div.field', h('label', 'Email'), email), h('div.field', h('label', 'Contraseña'), pass), err, btn));
+  document.title = 'Iniciar sesión · Gestión de Aplicaciones';
+  setTimeout(() => email.focus(), 0);
 }
 
 function buildShell() {
   document.body.classList.remove('center-page');
-  nav = h('nav.nav');
-  content = h('main.content');
+  nav = h('nav.nav', { 'aria-label': 'Menú principal' });
+  content = h('main.content', { id: 'main', tabindex: '-1' });
   const companySel = state.me.companies.length > 1
     ? h('select.company-select', { onchange: (e) => { state.companyId = Number(e.target.value); localStorage.setItem('companyId', state.companyId); buildShell(); refreshApps().then(route); } },
       state.me.companies.map((c) => h('option', { value: c.id, selected: c.id === state.companyId }, '🏢 ' + c.name)))
@@ -56,13 +60,21 @@ function buildShell() {
     h('div.acts',
       h('button.btn.sm.ghost', { title: 'Mi perfil', onclick: () => changePassword(false) }, '⚙ Perfil'),
       h('button.btn.sm.ghost', { title: 'Cambiar tema claro/oscuro', onclick: toggleTheme }, '◐ Tema'),
+      h('button.btn.sm.ghost', { title: 'Accesibilidad: tamaño de letra, contraste, lector de pantalla', onclick: openA11y }, '♿ Accesibilidad'),
       h('button.btn.sm.ghost', { title: 'Cerrar sesión', onclick: async () => { await api('/logout', { method: 'POST' }); location.reload(); } }, '⎋ Salir')));
   const company = state.me.companies.find((c) => c.id === state.companyId);
   const brandIcon = company && company.has_logo ? h('img.logo-img', { src: `/api/companies/${company.id}/logo?v=${Date.now()}`, alt: '' }) : h('div.logo', 'G');
   const sidebar = h('aside.sidebar', h('div.brand', brandIcon, h('span', state.me.app_name)), companySel, nav, userMenu);
-  const topbar = h('header.topbar', h('button.btn.ghost.icon', { onclick: () => shell.classList.toggle('nav-open') }, '☰'), h('strong', state.me.app_name));
+  const menuBtn = h('button.btn.ghost.icon', { 'aria-label': 'Abrir menú', 'aria-expanded': 'false', 'aria-controls': 'sidebar', onclick: () => {
+    const open = shell.classList.toggle('nav-open'); menuBtn.setAttribute('aria-expanded', open);
+    if (open) { const a = nav.querySelector('a'); a && a.focus(); }
+  } }, '☰');
+  sidebar.id = 'sidebar';
+  sidebar.addEventListener('keydown', (e) => { if (e.key === 'Escape' && shell.classList.contains('nav-open')) { shell.classList.remove('nav-open'); menuBtn.setAttribute('aria-expanded', 'false'); menuBtn.focus(); } });
+  const topbar = h('header.topbar', menuBtn, h('strong', state.me.app_name));
+  const skip = h('a.skip-link', { href: '#main', onclick: (e) => { e.preventDefault(); content.focus(); } }, 'Saltar al contenido');
   shell = h('div.shell', sidebar, h('div.backdrop', { onclick: () => shell.classList.remove('nav-open') }), h('div.main', topbar, content));
-  clear(root, shell);
+  clear(root, skip, shell);
 }
 
 function toggleTheme() {
@@ -79,22 +91,35 @@ async function refreshApps() {
 
 function drawNav() {
   const cur = location.hash || '#/';
-  const link = (href, ico, label, extra, color) => h('a', { href, class: cur === href || (href !== '#/' && cur.startsWith(href + '/')) ? 'active' : '', onclick: () => shell.classList.remove('nav-open') },
+  const link = (href, ico, label, extra, color) => {
+    const on = cur === href || (href !== '#/' && cur.startsWith(href + '/'));
+    return h('a', { href, class: on ? 'active' : '', 'aria-current': on ? 'page' : null, 'aria-label': extra != null ? `${label}, ${extra} registro${extra === 1 ? '' : 's'}` : null,
+      onclick: () => shell.classList.remove('nav-open') },
     h('span.ico', { style: color ? { background: color + '22' } : {} }, ico), h('span', label), extra != null ? h('span.count', extra) : null);
+  };
   clear(nav,
     link('#/', '🏠', 'Inicio'),
-    state.apps.length ? h('div.section', 'Aplicaciones') : null,
+    state.apps.length ? h('div.section', { role: 'heading', 'aria-level': '2' }, 'Aplicaciones') : null,
     state.apps.map((a) => link('#/app/' + a.key, a.icon || '📁', a.name, a.count, a.color)),
-    state.me.is_superadmin ? [h('div.section', 'Super admin'),
+    state.me.is_superadmin ? [h('div.section', { role: 'heading', 'aria-level': '2' }, 'Super admin'),
       link('#/admin/companies', '🏢', 'Empresas'), link('#/admin/centers', '📍', 'Centros'), link('#/admin/users', '👥', 'Usuarios'),
       link('#/admin/roles', '🛡️', 'Roles y políticas'), link('#/admin/apps', '🧩', 'Apps y campos'), link('#/admin/audit', '🕘', 'Auditoría'), link('#/admin/settings', '⚙️', 'Ajustes')] : null);
 }
 
+let firstRoute = true;
 async function route() {
+  await routeInner();
+  const h1 = content.querySelector('h1');
+  const name = h1 ? h1.textContent.trim() : '';
+  document.title = name ? `${name} · ${state.me.app_name}` : state.me.app_name;
+  if (firstRoute) { firstRoute = false; return; }
+  if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } else content.focus({ preventScroll: true });
+}
+async function routeInner() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [a, b, c] = hash.split('/');
   drawNav();
-  clear(content, h('p.muted', 'Cargando…'));
+  clear(content, h('p.muted', { role: 'status' }, 'Cargando…'));
   try {
     if (a === 'app' && b) return await renderApp(content, b, refreshApps);
     if (a === 'admin' && state.me.is_superadmin) {
@@ -133,7 +158,36 @@ function homeStats(a) {
     s.overdue ? h('span.chip.danger', { onclick: go({ state: s.open !== undefined ? 'open' : '', overdue: true }) }, `⚠ ${s.overdue} vencido${s.overdue === 1 ? '' : 's'}`) : null,
     s.mine ? h('span.chip', { onclick: go({ state: s.open !== undefined ? 'open' : '', mine: true }) }, `👤 ${s.mine} mío${s.mine === 1 ? '' : 's'}`) : null,
   ].filter(Boolean);
-  return items.length ? h('div.home-stats', items) : null;
+  return items.length ? h('div.home-stats', items) : null; // forman parte del texto del enlace de la tarjeta
+}
+
+/** Preferencias de accesibilidad (se guardan en este navegador). */
+function openA11y() {
+  const p = getPrefs();
+  const text = h('select', [['normal', 'Normal'], ['lg', 'Grande (115 %)'], ['xl', 'Muy grande (130 %)'], ['xxl', 'Enorme (150 %)']]
+    .map(([v, l]) => h('option', { value: v, selected: p.text === v }, l)));
+  const cb = (k, label, help) => {
+    const i = h('input', { type: 'checkbox', checked: !!p[k], 'aria-describedby': null });
+    return [h('label.check', i, label), help ? h('div.help', { style: { marginLeft: '26px', marginTop: '-6px' } }, help) : null, i];
+  };
+  const [cLbl, cHelp, contrast] = cb('contrast', 'Alto contraste', 'Texto negro sobre blanco, bordes marcados y foco muy visible.');
+  const [lLbl, , links] = cb('links', 'Subrayar enlaces');
+  const [mLbl, , motion] = cb('motion', 'Quitar animaciones');
+  const apply = () => setPrefs({ text: text.value, contrast: contrast.checked, links: links.checked, motion: motion.checked });
+  [text, contrast, links, motion].forEach((x) => x.addEventListener('change', apply));
+  modal({
+    title: '♿ Accesibilidad', size: 'sm',
+    content: h('div.stack',
+      h('div.field', h('label', 'Tamaño del texto'), text), cLbl, cHelp, lLbl, mLbl,
+      h('h3', 'Lector de pantalla y teclado'),
+      h('ul.small', { style: { margin: 0, paddingLeft: '18px' } },
+        h('li', 'Funciona con NVDA, JAWS, Narrador (Windows), VoiceOver (Mac, iPhone) y TalkBack (Android).'),
+        h('li', 'Tab / Mayús+Tab recorren los controles; Intro abre; Esc cierra ventanas y menús.'),
+        h('li', 'En las listas, cada fila tiene un botón «Abrir»; los encabezados de columna ordenan con Intro.'),
+        h('li', 'Para firmar sin dibujar, usa «Firmar escribiendo el nombre».'),
+        h('li', 'Los cambios se guardan en este navegador.'))),
+    footer: [h('button.btn', { onclick: () => { setPrefs({}); announce('Preferencias restablecidas'); text.value = 'normal'; [contrast, links, motion].forEach((x) => { x.checked = false; }); } }, 'Restablecer'), h('div.spacer')],
+  });
 }
 
 function changePassword(forced) {

@@ -225,7 +225,8 @@ router.get('/:appKey', wrap(async (req, res) => {
     can_view_without_center: can(req.grants, 'view', req.user, { center_id: null }),
     centers, users: await companyUsers(req), layouts, closed_values: closedValues(req.appDef),
     // nombres de todos los usuarios de la empresa (también desactivados) para mostrar registros antiguos
-    user_names: Object.fromEntries((await all(`SELECT DISTINCT u.id, u.name FROM users u JOIN user_assignments a ON a.user_id = u.id AND a.company_id = ?`, req.companyId)).map((u) => [u.id, u.name])),
+    user_names: Object.fromEntries((await all(`SELECT DISTINCT u.id, u.name FROM users u LEFT JOIN user_assignments a ON a.user_id = u.id AND a.company_id = ?
+      WHERE a.user_id IS NOT NULL OR u.is_superadmin = 1`, req.companyId)).map((u) => [u.id, u.name])),
   });
 }));
 

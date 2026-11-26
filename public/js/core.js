@@ -1,4 +1,6 @@
 // Utilidades compartidas del frontend: API, creación de elementos, modales, avisos.
+import { announce, trapFocus } from './a11y.js';
+export { announce, pressable } from './a11y.js';
 export const state = { me: null, companyId: Number(localStorage.getItem('companyId')) || null, apps: [] };
 
 export async function api(path, { method = 'GET', body, raw = false, form } = {}) {
@@ -42,8 +44,9 @@ function append(el, children) {
 export const clear = (el, ...children) => { el.replaceChildren(); append(el, children); return el; };
 
 export function toast(msg, type = '') {
-  const t = h('div.toast', { class: type }, msg);
+  const t = h('div.toast', { class: type, 'aria-hidden': 'true' }, msg);
   document.getElementById('toasts').append(t);
+  announce(type === 'error' ? 'Error: ' + msg : msg, type === 'error');
   setTimeout(() => t.remove(), type === 'error' ? 6000 : 3200);
 }
 export const toastErr = (e) => toast(e.message || String(e), 'error');
@@ -52,17 +55,31 @@ export const toastErr = (e) => toast(e.message || String(e), 'error');
 export function modal({ title, size = '', content, footer, onClose, tabs } = {}) {
   const body = h('div.modal-body');
   const foot = h('div.modal-foot');
-  const box = h('div.modal', { class: size, role: 'dialog', 'aria-modal': 'true' },
-    h('div.modal-head', h('h2', title), h('button.btn.ghost.icon', { title: 'Cerrar', onclick: () => close() }, '✕')),
+  const titleId = 'dlg-' + Math.random().toString(36).slice(2, 9);
+  const box = h('div.modal', { class: size, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId },
+    h('div.modal-head', h('h2', { id: titleId, tabindex: '-1' }, title), h('button.btn.ghost.icon', { title: 'Cerrar', 'aria-label': 'Cerrar ventana', onclick: () => close() }, '✕')),
     tabs || null, body, foot);
   const bg = h('div.modal-bg', { onmousedown: (e) => { if (e.target === bg) close(); } }, box);
-  const onKey = (e) => { if (e.key === 'Escape' && document.querySelectorAll('.modal-bg').length && bg === [...document.querySelectorAll('.modal-bg')].pop()) close(); };
-  function close(v) { bg.remove(); document.removeEventListener('keydown', onKey); onClose && onClose(v); }
+  const opener = document.activeElement; // al cerrar, el foco vuelve a donde estaba
+  const isTop = () => bg === [...document.querySelectorAll('.modal-bg')].pop();
+  const onKey = (e) => {
+    if (!isTop()) return;
+    if (e.key === 'Escape') close();
+    else trapFocus(box, e);
+  };
+  function close(v) {
+    bg.remove(); document.removeEventListener('keydown', onKey);
+    if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
+    onClose && onClose(v);
+  }
   document.addEventListener('keydown', onKey);
   if (content) append(body, [content]);
   if (footer) append(foot, [footer]); else foot.hidden = true;
   document.body.append(bg);
-  setTimeout(() => { const f = box.querySelector('input:not([type=checkbox]):not([readonly]), select, textarea'); f && f.focus(); }, 30);
+  setTimeout(() => {
+    const f = box.querySelector('.modal-body input:not([type=checkbox]):not([readonly]):not([disabled]), .modal-body select:not([disabled]), .modal-body textarea:not([disabled])');
+    (f || box.querySelector('h2')).focus();
+  }, 30);
   return { el: box, body, foot, close };
 }
 
@@ -117,19 +134,38 @@ export function promptDlg(title, fields, { ok = 'Guardar' } = {}) {
         h('button.btn.primary', { onclick: () => { result = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, read(i)])); m.close(); } }, ok)],
       onClose: () => resolve(result),
     });
-    m.body.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') m.foot.querySelector('.primary').click(); });
+    m.body.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); m.foot.querySelector('.primary').click(); } });
   });
 }
 
 export function dropdown(button, items) {
   const wrap = h('div.dropdown', button);
   let menu = null;
-  const closeMenu = () => { menu && menu.remove(); menu = null; document.removeEventListener('click', outside, true); };
+  button.setAttribute('aria-haspopup', 'menu');
+  button.setAttribute('aria-expanded', 'false');
+  const closeMenu = (refocus) => {
+    menu && menu.remove(); menu = null; button.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', outside, true);
+    if (refocus) button.focus();
+  };
   const outside = (e) => { if (!wrap.contains(e.target)) closeMenu(); };
   button.addEventListener('click', () => {
     if (menu) return closeMenu();
-    menu = h('div.dropdown-menu', items.filter(Boolean).map((it) => it === '-' ? h('hr') : h('button', { onclick: () => { closeMenu(); it.onclick(); } }, it.label)));
+    menu = h('div.dropdown-menu', { role: 'menu' }, items.filter(Boolean).map((it) => it === '-' ? h('hr', { role: 'separator' })
+      : h('button', { role: 'menuitem', tabindex: '-1', onclick: () => { closeMenu(true); it.onclick(); } }, it.label)));
+    menu.addEventListener('keydown', (e) => {
+      const list = [...menu.querySelectorAll('[role=menuitem]')];
+      const i = list.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+      else if (e.key === 'Home') { e.preventDefault(); list[0].focus(); }
+      else if (e.key === 'End') { e.preventDefault(); list[list.length - 1].focus(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(true); }
+      else if (e.key === 'Tab') closeMenu();
+    });
     wrap.append(menu);
+    button.setAttribute('aria-expanded', 'true');
+    const first = menu.querySelector('[role=menuitem]'); first && first.focus();
     document.addEventListener('click', outside, true);
   });
   return wrap;
@@ -226,13 +262,15 @@ export function ipMask(input) {
 export function signaturePad(title = 'Firmar') {
   return new Promise((resolve) => {
     let result = null, drawn = false;
-    const canvas = h('canvas.sig-canvas');
+    const canvas = h('canvas.sig-canvas', { role: 'img', 'aria-label': 'Recuadro de firma' });
     const hint = h('div.sig-hint', 'Firme aquí');
     const wrap = h('div.sig-wrap', canvas, hint, h('div.sig-line'));
     const m = modal({
       title: '✍ ' + title, size: '',
       content: [h('p.muted.small', 'Firme dentro del recuadro con el dedo, un lápiz táctil o el ratón.'), wrap],
-      footer: [h('button.btn', { onclick: () => clearPad() }, '↺ Borrar'), h('div.spacer'),
+      footer: [h('button.btn', { onclick: () => clearPad() }, '↺ Borrar'),
+        h('button.btn', { title: 'Alternativa accesible: escribe tu nombre y se convierte en firma', onclick: () => typed() }, '⌨ Firmar escribiendo el nombre'),
+        h('div.spacer'),
         h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
         h('button.btn.primary', { onclick: () => {
           if (!drawn) return toast('Firme antes de aceptar', 'error');
@@ -249,6 +287,21 @@ export function signaturePad(title = 'Firmar') {
     };
     requestAnimationFrame(setup);
     function clearPad() { ctx.clearRect(0, 0, canvas.width, canvas.height); drawn = false; hint.hidden = false; }
+    // firma tecleada: útil con lector de pantalla o sin poder dibujar
+    async function typed() {
+      const v = await promptDlg('Firmar escribiendo el nombre', [{ key: 'name', label: 'Nombre y apellidos', required: true, help: 'Se dibujará como firma en el recuadro.' }], { ok: 'Firmar' });
+      const name = v && v.name.trim();
+      if (!name) return;
+      clearPad();
+      const r = canvas.getBoundingClientRect();
+      let size = 46;
+      do { ctx.font = `italic ${size}px "Segoe Script", "Brush Script MT", "Lucida Handwriting", cursive`; size -= 2; } while (ctx.measureText(name).width > r.width - 40 && size > 14);
+      ctx.fillStyle = '#111827'; ctx.textBaseline = 'middle';
+      ctx.fillText(name, 20, r.height / 2);
+      drawn = true; hint.hidden = true;
+      announce(`Firma generada con el nombre ${name}. Pulsa Aceptar firma para guardarla.`);
+      m.foot.querySelector('.btn.primary').focus();
+    }
     let last = null;
     const pos = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
     canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); last = pos(e); ctx.beginPath(); ctx.arc(last.x, last.y, 1.1, 0, Math.PI * 2); ctx.fillStyle = '#111827'; ctx.fill(); drawn = true; hint.hidden = true; });
@@ -303,8 +356,9 @@ export async function prepareImage(file, maxSide = 1600) {
 export function imageViewer(urls, start = 0) {
   let i = start;
   const img = h('img.viewer-img', { alt: '' });
+  const names = Array.isArray(urls.names) ? urls.names : [];
   const count = h('span.muted.small');
-  const show = () => { img.src = urls[i]; count.textContent = urls.length > 1 ? `${i + 1} / ${urls.length}` : ''; };
+  const show = () => { img.src = urls[i]; img.alt = names[i] || `Imagen ${i + 1} de ${urls.length}`; count.textContent = urls.length > 1 ? `${i + 1} / ${urls.length}` : ''; };
   const m = modal({
     title: 'Imagen', size: 'lg',
     content: h('div.viewer', img),

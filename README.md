@@ -102,6 +102,17 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 | **Responsive e intuitivo** | Menú lateral plegable, tablas que pasan a tarjetas en móvil, formularios a pantalla completa en móvil, tema claro/oscuro. |
 | **Datos generales (super admin)** | Empresas, centros, usuarios, roles, aplicaciones/campos y ajustes (nombre, URL pública, SMTP). |
 
+## Accesibilidad (usuarios invidentes o con baja visión)
+
+- Compatible con lectores de pantalla: NVDA, JAWS, Narrador, VoiceOver (Mac/iPhone) y TalkBack (Android).
+- Todo se maneja con teclado: «Saltar al contenido» con el primer Tab, foco visible, Esc cierra ventanas y menús,
+  flechas en los menús desplegables, el foco queda atrapado en la ventana abierta y vuelve a su sitio al cerrarla.
+- Campos con su etiqueta, obligatorios y ayudas anunciados; botones de solo icono con nombre; avisos y errores leídos en voz alta;
+  número de resultados anunciado al buscar o filtrar; tablas con título, columnas ordenables con Intro y botón «Abrir» por fila.
+- Firma sin dibujar: «Firmar escribiendo el nombre». Columnas reordenables con ▲ ▼ además de arrastrar.
+- Menú de usuario → **♿ Accesibilidad**: tamaño de texto (hasta 150 %), alto contraste, subrayar enlaces y quitar animaciones
+  (se guarda en cada navegador). El código está en `public/js/a11y.js` y se aplica solo a las pantallas nuevas.
+
 ## Estructura
 
 ```

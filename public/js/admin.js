@@ -51,12 +51,12 @@ async function simpleEntity(root, { title, sub, path, columns, form, newLabel, o
   function draw() {
     const list = rows.filter((r) => !filter || JSON.stringify(r).toLowerCase().includes(filter));
     clear(tableBox, list.length ? h('div.table-wrap', h('table.data',
-      h('thead', h('tr', columns.map((c) => h('th.nosort', c.label)), h('th.nosort', ''))),
+      h('thead', h('tr', columns.map((c) => h('th.nosort', c.label)), h('th.nosort', h('span.sr-only', 'Acciones')))),
       h('tbody', list.map((r) => h('tr', { class: r.deleted_at ? 'deleted' : '', onclick: () => !r.deleted_at && edit(r) },
         columns.map((c) => h('td', c.render ? c.render(r, load) : r[c.key] ?? '')),
-        h('td.actions', { onclick: (e) => e.stopPropagation() }, r.deleted_at
+        h('td.actions', { onclick: (e) => e.stopPropagation() }, r.deleted_at ? null : h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', onclick: () => edit(r) }, `Editar ${r.name || r.code || ''}`), r.deleted_at
           ? h('button.btn.sm.ok', { onclick: async () => { await api(`/admin/${path}/${r.id}/restore`, { method: 'POST' }); toast('Restaurado', 'ok'); load(); onChange && onChange(); } }, '↩ Restaurar')
-          : h('button.btn.sm.ghost', { title: 'Papelera', onclick: async () => {
+          : h('button.btn.sm.ghost', { title: 'Papelera', 'aria-label': `Enviar ${r.name || r.code || ''} a la papelera`, onclick: async () => {
             if (!(await confirmDlg('¿Enviar a la papelera? Podrás restaurarlo después.', { danger: true }))) return;
             try { await api(`/admin/${path}/${r.id}`, { method: 'DELETE' }); toast('Enviado a la papelera', 'ok'); load(); onChange && onChange(); } catch (e) { toastErr(e); }
           } }, '🗑️')))))))
@@ -139,9 +139,9 @@ export async function renderUsers(root) {
         h('td', { style: { whiteSpace: 'normal' } }, u.assignments.map((a) => h('span.chip', { style: { margin: '2px' } }, `${a.company_name} › ${a.center_name || 'Todos'} › ${a.role_name}`))),
         h('td.small', fmtDateTime(u.last_login)),
         h('td', h('span.chip', { class: u.active ? 'ok' : '' }, u.active ? 'Activo' : 'Inactivo')),
-        h('td.actions', { onclick: (e) => e.stopPropagation() }, u.deleted_at
+        h('td.actions', { onclick: (e) => e.stopPropagation() }, u.deleted_at ? null : h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', onclick: () => edit(u) }, `Editar ${u.name}`), u.deleted_at
           ? h('button.btn.sm.ok', { onclick: async () => { await api(`/admin/users/${u.id}/restore`, { method: 'POST' }); load(); } }, '↩ Restaurar')
-          : h('button.btn.sm.ghost', { onclick: async () => { if (await confirmDlg(`¿Enviar a ${u.name} a la papelera? Perderá el acceso.`, { danger: true })) { try { await api(`/admin/users/${u.id}`, { method: 'DELETE' }); load(); } catch (e) { toastErr(e); } } } }, '🗑️'))))))));
+          : h('button.btn.sm.ghost', { 'aria-label': `Enviar a ${u.name} a la papelera`, onclick: async () => { if (await confirmDlg(`¿Enviar a ${u.name} a la papelera? Perderá el acceso.`, { danger: true })) { try { await api(`/admin/users/${u.id}`, { method: 'DELETE' }); load(); } catch (e) { toastErr(e); } } } }, '🗑️'))))))));
   }
   function edit(u) {
     const f = {

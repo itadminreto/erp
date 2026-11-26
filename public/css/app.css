@@ -96,7 +96,7 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .input-group input { flex: 1; }
 .search { position: relative; flex: 1; min-width: 200px; max-width: 420px; }
 .search input { padding-left: 34px; }
-.search::before { content: "🔍"; position: absolute; left: 11px; top: 50%; transform: translateY(-50%); font-size: 13px; opacity: .6; }
+.search::before { content: "🔍" / ""; position: absolute; left: 11px; top: 50%; transform: translateY(-50%); font-size: 13px; opacity: .6; }
 
 /* ---------- tarjetas ---------- */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
@@ -420,3 +420,41 @@ table.data td.actions { box-shadow: -8px 0 8px -8px rgba(16,24,40,.25); }
 /* el asa ⋮⋮ para mover columnas solo aparece al pasar el ratón: así no resta ancho a las columnas */
 table.data th .grip { display: inline-block; width: 0; overflow: hidden; vertical-align: bottom; transition: width .12s; }
 table.data thead:hover th .grip { width: 12px; }
+
+/* ---------- accesibilidad ---------- */
+.sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.sr-only-focusable:not(:focus):not(:focus-visible) { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip-link { position: fixed; left: 12px; top: -60px; z-index: 1000; background: var(--primary); color: var(--primary-text); padding: 10px 16px; border-radius: 8px; font-weight: 600; }
+.skip-link:focus { top: 12px; }
+:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.btn:focus-visible, a:focus-visible, [role=button]:focus-visible, .seg button:focus-visible, .tabs button:focus-visible, .dropdown-menu button:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 25%, transparent); }
+.modal-head h2:focus { outline: none; }
+main:focus, h1:focus { outline: none; }
+tr:focus-within td { background: var(--primary-2); }
+.th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
+.th-sort:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.sort-item .up, .sort-item .down { padding: 2px 7px; min-height: 0; font-size: .7rem; }
+
+/* tamaño de texto (preferencia del usuario) */
+html[data-text="lg"] body { zoom: 1.15; }
+html[data-text="xl"] body { zoom: 1.3; }
+html[data-text="xxl"] body { zoom: 1.5; }
+html[data-links="1"] a:not(.btn):not(.nav a):not(.app-card):not(.skip-link) { text-decoration: underline; }
+html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* alto contraste */
+html[data-contrast="1"] {
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #ffffff; --border: #000000; --text: #000000; --muted: #1f1f1f;
+  --primary: #1a0dab; --primary-2: #e6e9ff; --primary-text: #ffffff;
+  --danger: #b00000; --danger-bg: #ffe5e5; --danger-row: #ffe5e5; --ok: #005a2b; --ok-bg: #dcf5e7; --warn: #7a3d00; --warn-bg: #fff0d6;
+  --shadow: none; color-scheme: light;
+}
+html[data-contrast="1"] .card, html[data-contrast="1"] .btn, html[data-contrast="1"] input, html[data-contrast="1"] select, html[data-contrast="1"] textarea,
+html[data-contrast="1"] .modal, html[data-contrast="1"] table.data th, html[data-contrast="1"] table.data td { border-color: #000 !important; }
+html[data-contrast="1"] .btn, html[data-contrast="1"] input, html[data-contrast="1"] select, html[data-contrast="1"] textarea { border-width: 2px; }
+html[data-contrast="1"] :focus-visible { outline: 4px solid #000 !important; outline-offset: 2px; box-shadow: 0 0 0 7px #ffde00 !important; }
+html[data-contrast="1"] .muted { color: #1f1f1f !important; }
+html[data-contrast="1"] tr.closed td { opacity: 1 !important; }
+html[data-contrast="1"] .chip, html[data-contrast="1"] .chip.opt { color: #000 !important; border: 1px solid #000 !important; }
+html[data-contrast="1"] .due.over { color: #b00000 !important; font-weight: 700; }

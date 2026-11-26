@@ -2,6 +2,7 @@
 import {
   api, h, clear, toast, toastErr, modal, confirmDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
   genPassword, copy, sortable, ACTION_LABELS, state, ipMask, signaturePad, prepareImage, imageViewer, webcamPhoto, canUseWebcam,
+  announce, pressable,
 } from './core.js';
 import { printDoc, docPdf, blobToBase64, esc } from './print.js';
 
@@ -17,7 +18,7 @@ const META_COLS = {
 export async function renderApp(root, key, onCountsChanged) {
   const meta = await api('/apps/' + key);
   const fieldsByKey = Object.fromEntries(meta.fields.map((f) => [f.key, f]));
-  const usersById = { ...Object.fromEntries(Object.entries(meta.user_names || {}).map(([id, name]) => [id, { id: Number(id), name: name + ' (inactivo)' }])), ...Object.fromEntries(meta.users.map((u) => [u.id, u])) };
+  const usersById = { ...Object.fromEntries(Object.entries(meta.user_names || {}).map(([id, name]) => [id, { id: Number(id), name }])), ...Object.fromEntries(meta.users.map((u) => [u.id, u])) };
   const P = meta.perms;
   const st = { q: '', center: '', trash: false, sort: '', dir: 'desc', page: 1, size: 50, selected: new Set(), rows: [], total: 0, filters: {}, state: '', mine: false, overdue: false, view: 'list', calMonth: '', calField: '', colorField: '' };
   const persistKey = `view:${key}`;
@@ -73,11 +74,11 @@ export async function renderApp(root, key, onCountsChanged) {
     h('div.app-ico', { style: { background: meta.app.color + '22', color: meta.app.color } }, meta.app.icon || '📁'),
     h('div', h('h1', meta.app.name), h('div.muted.small', meta.app.description || '')));
   const newBtn = P.create ? h('button.btn.primary', { onclick: () => openRecord(null) }, '＋ ', h('span.lbl', 'Nuevo')) : null;
-  const searchInp = h('input', { type: 'search', placeholder: 'Buscar…', value: st.q, oninput: debounce((e) => { st.q = e.target.value; st.page = 1; load(); }, 300) });
+  const searchInp = h('input', { type: 'search', placeholder: 'Buscar…', 'aria-label': `Buscar en ${meta.app.name} (también por Nº)`, value: st.q, oninput: debounce((e) => { st.q = e.target.value; st.page = 1; load(); }, 300) });
   // el filtro guardado solo vale si el centro sigue siendo visible para este usuario
   if (st.center && st.center !== 'none' && !meta.centers.some((c) => String(c.id) === String(st.center))) st.center = '';
   if (st.center === 'none' && !meta.can_view_without_center) st.center = '';
-  const centerSel = h('select', { style: { width: 'auto', maxWidth: '220px' }, onchange: (e) => { st.center = e.target.value; st.page = 1; load(); } },
+  const centerSel = h('select', { 'aria-label': 'Filtrar por centro', style: { width: 'auto', maxWidth: '220px' }, onchange: (e) => { st.center = e.target.value; st.page = 1; load(); } },
     h('option', { value: '' }, 'Todos los centros'),
     meta.centers.map((c) => h('option', { value: c.id, selected: String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)),
     meta.can_view_without_center ? h('option', { value: 'none', selected: st.center === 'none' }, '(Sin centro)') : null);
@@ -93,7 +94,7 @@ export async function renderApp(root, key, onCountsChanged) {
   const importBtn = P.import ? h('button.btn', { onclick: () => openImport() }, '⬆ ', h('span.lbl', 'Importar')) : null;
   const colsBtn = h('button.btn', { title: 'Columnas', onclick: () => openColumns() }, '☰ ', h('span.lbl', 'Columnas'));
   const printBtn = h('button.btn', { title: 'Imprimir', onclick: () => (st.view === 'calendar' ? printCalendar() : printList()) }, '🖨 ', h('span.lbl', 'Imprimir'));
-  const viewBtns = dateFields.length ? h('div.seg', { role: 'tablist' },
+  const viewBtns = dateFields.length ? h('div.seg', { role: 'group', 'aria-label': 'Vista' },
     h('button', { class: st.view === 'list' ? 'on' : '', onclick: () => setView('list') }, '☰ Lista'),
     h('button', { class: st.view === 'calendar' ? 'on' : '', onclick: () => setView('calendar') }, '📅 Calendario')) : null;
   function setView(v) {
@@ -105,7 +106,7 @@ export async function renderApp(root, key, onCountsChanged) {
   }
 
   // ----- filtros rápidos (abiertos/cerrados, míos) y panel de filtros -----
-  const stateSeg = hasStatus ? h('div.seg', { title: 'Mostrar según el estado' },
+  const stateSeg = hasStatus ? h('div.seg', { title: 'Mostrar según el estado', role: 'group', 'aria-label': 'Mostrar según el estado' },
     [['open', 'Abiertos'], ['closed', 'Cerrados'], ['', 'Todos']].map(([v, l]) => h('button', { class: st.state === v ? 'on' : '', dataset: { v }, onclick: () => {
       st.state = v; st.page = 1; [...stateSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.v === v)); load();
     } }, l))) : null;
@@ -119,9 +120,9 @@ export async function renderApp(root, key, onCountsChanged) {
   function drawActiveFilters() {
     const act = Object.entries(st.filters).filter(([k, v]) => v !== '' && fieldsByKey[k]);
     if (filterBtn) { const bd = filterBtn.querySelector('.badge'); bd.hidden = !act.length; bd.textContent = act.length; }
-    clear(activeBar, st.overdue ? h('span.chip.filter-chip', '⚠ Solo vencidos', h('button', { title: 'Quitar filtro', onclick: () => { st.overdue = false; st.page = 1; drawActiveFilters(); load(); } }, '✕')) : null,
+    clear(activeBar, st.overdue ? h('span.chip.filter-chip', '⚠ Solo vencidos', h('button', { title: 'Quitar filtro', 'aria-label': 'Quitar filtro: solo vencidos', onclick: () => { st.overdue = false; st.page = 1; drawActiveFilters(); load(); } }, '✕')) : null,
       act.map(([k, v]) => h('span.chip.filter-chip', `${fieldsByKey[k].label}: ${filterText(k, v)}`,
-      h('button', { title: 'Quitar filtro', onclick: () => { delete st.filters[k]; st.page = 1; drawActiveFilters(); load(); } }, '✕'))),
+      h('button', { title: 'Quitar filtro', 'aria-label': `Quitar filtro ${fieldsByKey[k].label}: ${filterText(k, v)}`, onclick: () => { delete st.filters[k]; st.page = 1; drawActiveFilters(); load(); } }, '✕'))),
     act.length > 1 ? h('button.btn.sm.ghost', { onclick: () => { st.filters = {}; st.page = 1; drawActiveFilters(); load(); } }, 'Quitar todos') : null);
   }
   function openFilters() {
@@ -180,11 +181,14 @@ export async function renderApp(root, key, onCountsChanged) {
       const r = await api(`/apps/${key}/records?${qs}`);
       st.rows = r.rows; st.total = r.total;
       draw();
+      announce(`${st.total} registro${st.total === 1 ? '' : 's'}${pagesCount() > 1 ? `, página ${st.page} de ${pagesCount()}` : ''}`);
     } catch (e) { toastErr(e); }
   }
 
+  const pagesCount = () => Math.max(1, Math.ceil(st.total / st.size));
   function cellText(r, c) {
     const f = fieldsByKey[c];
+    if (f && f.type === 'date') return fmtDate(r.data[c]);
     if (f && f.type === 'password') return r.data[c] ? '••••••' : '';
     if (f && f.type === 'signature') return r.data[c] && (r.data[c].signed || r.data[c].img) ? `Firmado ${fmtDateTime(r.data[c].at)}` : '';
     if (f && f.type === 'image') { const n = Array.isArray(r.data[c]) ? r.data[c].length : (r.data[c] && r.data[c].count) || 0; return n ? `${n} imagen${n > 1 ? 'es' : ''}` : ''; }
@@ -340,10 +344,11 @@ export async function renderApp(root, key, onCountsChanged) {
       days.map((d) => {
         const k = iso(d); const list = map[k] || [];
         return h('div.cal-day', {
+          role: 'group', 'aria-label': `${d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}${k === today ? ', hoy' : ''}: ${list.length ? list.length + ' elemento' + (list.length === 1 ? '' : 's') : 'nada'}`,
           class: [d.getMonth() !== m - 1 ? 'out' : '', k === today ? 'today' : '', d.getDay() % 6 === 0 ? 'we' : ''].join(' '),
           title: P.create ? 'Doble clic para crear' : '',
           ondblclick: () => P.create && openRecord(null, { [st.calField]: st.calField && fieldsByKey[st.calField].type === 'datetime' ? k + 'T09:00' : k }),
-        }, h('div.cal-num', d.getDate()),
+        }, h('div.cal-num', { 'aria-hidden': 'true' }, d.getDate()),
         list.slice(0, MAX).map(chip),
         list.length > MAX ? h('button.cal-more', { onclick: () => openDay(k, list) }, `+${list.length - MAX} más`) : null);
       }));
@@ -355,9 +360,9 @@ export async function renderApp(root, key, onCountsChanged) {
     const legend = st.colorField !== '-' ? h('div.cal-legend', (fieldsByKey[st.colorField].options.choices || []).map((c, i) => h('span', { style: { '--c': choiceColor(fieldsByKey[st.colorField], c) } }, c))) : null;
     clear(calCard,
       h('div.cal-head',
-        h('div.row', h('button.btn.sm', { onclick: () => shift(-1) }, '‹'), h('button.btn.sm', { onclick: () => { st.calMonth = today.slice(0, 7); load(); } }, 'Hoy'), h('button.btn.sm', { onclick: () => shift(1) }, '›'),
-          h('h2.cal-title', monthName)),
-        h('div.row', h('label.small.muted', 'Fecha'), dateSel, colorFields.length ? [h('label.small.muted', 'Color'), colorSel] : null)),
+        h('div.row', h('button.btn.sm', { 'aria-label': 'Mes anterior', onclick: () => shift(-1) }, '‹'), h('button.btn.sm', { onclick: () => { st.calMonth = today.slice(0, 7); load(); } }, 'Hoy'), h('button.btn.sm', { 'aria-label': 'Mes siguiente', onclick: () => shift(1) }, '›'),
+          h('h2.cal-title', { 'aria-live': 'polite' }, monthName)),
+        h('div.row', h('label.small.muted', { for: (dateSel.id = 'cal-date-sel') }, 'Fecha'), dateSel, colorFields.length ? [h('label.small.muted', { for: (colorSel.id = 'cal-color-sel') }, 'Color'), colorSel] : null)),
       h('div.desktop-only', grid), h('div.mobile-only', agenda), legend,
       h('div.muted.small', { style: { padding: '0 14px 12px' } }, `${calRows.length} en el periodo${P.create ? ' · doble clic en un día para crear' : ''}`));
   }
@@ -388,16 +393,16 @@ export async function renderApp(root, key, onCountsChanged) {
     if (v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length)) return '';
     switch (f.type) {
       case 'password': {
-        const span = h('span.pw-mask', MASK);
+        const span = h('span.pw-mask', { role: 'img', 'aria-label': 'Contraseña oculta' }, MASK);
         if (!reveal || !r.can.view_passwords) return span;
         return h('span', span, ' ', h('button.btn.ghost.sm', { title: 'Mostrar', onclick: async (e) => {
           e.stopPropagation();
-          try { const { value } = await api(`/apps/${key}/records/${r.id}/password/${c}`); span.textContent = value; span.classList.remove('pw-mask'); e.target.replaceWith(h('button.btn.ghost.sm', { title: 'Copiar', onclick: (ev) => { ev.stopPropagation(); copy(value); } }, '📋')); } catch (err) { toastErr(err); }
+          try { const { value } = await api(`/apps/${key}/records/${r.id}/password/${c}`); span.textContent = value; span.classList.remove('pw-mask'); span.removeAttribute('role'); span.removeAttribute('aria-label'); e.target.replaceWith(h('button.btn.ghost.sm', { title: 'Copiar', onclick: (ev) => { ev.stopPropagation(); copy(value); } }, '📋')); } catch (err) { toastErr(err); }
         } }, '👁'));
       }
-      case 'date': { const d = dueState(r, f); return d ? h('span.due', { class: d, title: d === 'over' ? 'Vencido' : 'Vence pronto' }, d === 'over' ? '⚠ ' : '', fmtDate(v)) : fmtDate(v); }
+      case 'date': { const d = dueState(r, f); return d ? h('span.due', { class: d, title: d === 'over' ? 'Vencido' : 'Vence pronto' }, d === 'over' ? h('span', { 'aria-hidden': 'true' }, '⚠ ') : '', fmtDate(v), h('span.sr-only', d === 'over' ? ' (vencido)' : ' (vence pronto)')) : fmtDate(v); }
       case 'datetime': return fmtDateTime(v);
-      case 'checkbox': return v ? '✔' : '—';
+      case 'checkbox': return v ? '✔ Sí' : 'No';
       case 'user': return usersById[v] ? usersById[v].name : `#${v}`;
       case 'multiselect': return v.join(', ');
       case 'select': return h('span.chip.opt', { style: { '--c': choiceColor(f, v) } }, v);
@@ -415,21 +420,33 @@ export async function renderApp(root, key, onCountsChanged) {
   }
 
   function draw() {
+    // el foco de teclado se conserva al repintar (p. ej. tras guardar, ordenar o cambiar de página)
+    const act = document.activeElement;
+    const keepFocus = act && act !== document.body && (tableWrap.contains(act) || pager.contains(act)) ? (act.dataset.fk || 'first') : null;
     // tabla
     const cols = columns.map(colDef);
     const allSel = st.rows.length && st.rows.every((r) => st.selected.has(r.id));
     const headRow = h('tr',
-      h('th.cb.nosort', h('input', { type: 'checkbox', checked: !!allSel, onchange: (e) => { st.rows.forEach((r) => (e.target.checked ? st.selected.add(r.id) : st.selected.delete(r.id))); draw(); } })),
-      cols.map((c) => h('th', {
-        dataset: { col: c.key }, class: c.sortKey ? '' : 'nosort', title: 'Arrastra para mover la columna',
-        onclick: () => { if (!c.sortKey) return; if (st.sort === c.sortKey) st.dir = st.dir === 'asc' ? 'desc' : 'asc'; else { st.sort = c.sortKey; st.dir = 'asc'; } load(); },
-      }, h('span.grip', '⋮⋮'), c.label, st.sort && st.sort === c.sortKey ? h('span.sort', st.dir === 'asc' ? '▲' : '▼') : null)),
-      h('th.nosort', ''));
+      h('th.cb.nosort', h('input', { type: 'checkbox', 'aria-label': 'Seleccionar todos los de esta página', checked: !!allSel, onchange: (e) => { st.rows.forEach((r) => (e.target.checked ? st.selected.add(r.id) : st.selected.delete(r.id))); draw(); } })),
+      cols.map((c) => {
+        const sorted = st.sort && st.sort === c.sortKey;
+        const sortBy = () => { if (st.sort === c.sortKey) st.dir = st.dir === 'asc' ? 'desc' : 'asc'; else { st.sort = c.sortKey; st.dir = 'asc'; } load(); };
+        return h('th', {
+          dataset: { col: c.key }, class: c.sortKey ? '' : 'nosort', title: 'Arrastra para mover la columna', scope: 'col',
+          'aria-sort': sorted ? (st.dir === 'asc' ? 'ascending' : 'descending') : null,
+          onclick: (e) => { if (!c.sortKey || e.target.closest('button')) return; sortBy(); },
+        }, h('span.grip', '⋮⋮'),
+        c.sortKey ? h('button.th-sort', { type: 'button', dataset: { fk: 'sort-' + c.key }, 'aria-label': `${c.label}: ordenar ${sorted && st.dir === 'asc' ? 'descendente' : 'ascendente'}`, onclick: sortBy }, c.label) : c.label,
+        sorted ? h('span.sort', st.dir === 'asc' ? '▲' : '▼') : null);
+      }),
+      h('th.nosort', h('span.sr-only', 'Acciones')));
+    const recName = (r) => `Nº ${r.number}${r.data[meta.app.title_field] ? ', ' + String(r.data[meta.app.title_field]) : ''}${r.deleted_at ? ' (en la papelera)' : isClosed(r) ? ' (cerrado)' : ''}`;
     const tbody = h('tbody', st.rows.map((r) => h('tr', { class: [r.deleted_at ? 'deleted' : '', isClosed(r) ? 'closed' : ''].join(' '), onclick: () => openRecord(r) },
-      h('td.cb', { onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox', checked: st.selected.has(r.id), onchange: (e) => { e.target.checked ? st.selected.add(r.id) : st.selected.delete(r.id); drawBulk(); } })),
+      h('td.cb', { onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox', dataset: { fk: 'sel-' + r.id }, 'aria-label': `Seleccionar ${recName(r)}`, checked: st.selected.has(r.id), onchange: (e) => { e.target.checked ? st.selected.add(r.id) : st.selected.delete(r.id); drawBulk(); } })),
       cols.map((c) => h('td', { class: c.key === meta.app.title_field ? 'wrap' : '', title: typeof cellValue(r, c.key, { reveal: false }) === 'string' ? cellValue(r, c.key) : '' }, cellValue(r, c.key))),
-      h('td.actions', { onclick: (e) => e.stopPropagation() }, rowActions(r)))));
-    const table = h('table.data', h('thead', headRow), tbody);
+      h('td.actions', { onclick: (e) => e.stopPropagation() },
+        h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', dataset: { fk: 'open-' + r.id }, 'aria-label': `Abrir ${recName(r)}`, onclick: () => openRecord(r) }, 'Abrir'), rowActions(r)))));
+    const table = h('table.data', h('caption.sr-only', `${meta.app.name}: ${st.total} registro${st.total === 1 ? '' : 's'}. Página ${st.page} de ${pagesCount()}.`), h('thead', headRow), tbody);
     clear(tableWrap, st.rows.length ? table : emptyState());
     sortable(headRow, {
       filter: '.cb, th:last-child', preventOnFilter: false, draggable: 'th[data-col]',
@@ -438,21 +455,26 @@ export async function renderApp(root, key, onCountsChanged) {
 
     // tarjetas (móvil)
     const titleKey = meta.app.title_field || (meta.fields[0] && meta.fields[0].key);
-    clear(mobileList, st.rows.length ? st.rows.map((r) => h('div.card.rec-card', { class: [r.deleted_at ? 'deleted' : '', isClosed(r) ? 'closed' : ''].join(' '), onclick: () => openRecord(r) },
+    clear(mobileList, st.rows.length ? st.rows.map((r) => pressable(h('div.card.rec-card', { class: [r.deleted_at ? 'deleted' : '', isClosed(r) ? 'closed' : ''].join(' '), onclick: () => openRecord(r) },
       h('div.t', r.deleted_at ? '🗑️' : null, h('span.num', `${r.number}`), h('span', { style: { flex: 1 } }, String(r.data[titleKey] || '')), h('span.muted.small', r.center_code || r.center_name || '')),
       h('div.kv', columns.filter((c) => c !== titleKey && c !== '_center' && c !== '_num').slice(0, 5).map((c) => [h('span', colDef(c).label), h('span', cellValue(r, c, { reveal: false }) || '—')])),
       r.deleted_at && r.can.restore ? h('div', h('button.btn.sm.ok', { onclick: (e) => { e.stopPropagation(); restoreRec(r); } }, '↩ Restaurar')) : null,
-    )) : emptyState());
+    ), { role: r.deleted_at && r.can.restore ? null : 'button' })) : emptyState());
 
     // paginación
     const pages = Math.max(1, Math.ceil(st.total / st.size));
     clear(pager,
       h('span.muted.small', `${st.total} registro${st.total === 1 ? '' : 's'}`),
-      h('select', { style: { width: 'auto' }, onchange: (e) => { st.size = Number(e.target.value); st.page = 1; load(); } }, [25, 50, 100, 250].map((n) => h('option', { value: n, selected: n === st.size }, `${n} / pág.`))),
-      h('button.btn.sm', { disabled: st.page <= 1, onclick: () => { st.page--; load(); } }, '‹'),
+      h('select', { style: { width: 'auto' }, 'aria-label': 'Registros por página', onchange: (e) => { st.size = Number(e.target.value); st.page = 1; load(); } }, [25, 50, 100, 250].map((n) => h('option', { value: n, selected: n === st.size }, `${n} / pág.`))),
+      h('button.btn.sm', { dataset: { fk: 'prev' }, 'aria-label': 'Página anterior', disabled: st.page <= 1, onclick: () => { st.page--; load(); } }, '‹'),
       h('span.small', `${st.page} / ${pages}`),
-      h('button.btn.sm', { disabled: st.page >= pages, onclick: () => { st.page++; load(); } }, '›'));
+      h('button.btn.sm', { dataset: { fk: 'next' }, 'aria-label': 'Página siguiente', disabled: st.page >= pages, onclick: () => { st.page++; load(); } }, '›'));
     drawBulk();
+    if (keepFocus) {
+      const el = (tableWrap.querySelector(`[data-fk="${keepFocus}"]`) || pager.querySelector(`[data-fk="${keepFocus}"]:not(:disabled)`)
+        || tableWrap.querySelector('[data-fk^="open-"]') || root.querySelector('h1'));
+      if (el) { if (el.tagName === 'H1') el.tabIndex = -1; el.focus({ preventScroll: el.classList.contains('sr-only-focusable') }); }
+    }
   }
 
   function emptyState() {
@@ -523,12 +545,21 @@ export async function renderApp(root, key, onCountsChanged) {
   // ----- columnas -----
   function openColumns() {
     const order = [...columns, ...allColKeys().filter((c) => !columns.includes(c))];
+    const move = (item, dir) => {
+      const sib = dir < 0 ? item.previousElementSibling : item.nextElementSibling;
+      if (!sib) return;
+      if (dir < 0) sib.before(item); else sib.after(item);
+      item.querySelector(dir < 0 ? '.up' : '.down').focus();
+      announce(`${colDef(item.dataset.col).label}: posición ${[...list.children].indexOf(item) + 1} de ${list.children.length}`);
+    };
     const list = h('div.sort-list', order.map((c) => h('div.sort-item', { dataset: { col: c } },
-      h('span.grip', '⋮⋮'), h('label.check.grow', h('input', { type: 'checkbox', checked: columns.includes(c) }), colDef(c).label))));
+      h('span.grip', '⋮⋮'), h('label.check.grow', h('input', { type: 'checkbox', checked: columns.includes(c) }), colDef(c).label),
+      h('button.btn.ghost.sm.up', { type: 'button', 'aria-label': `Subir ${colDef(c).label}`, title: 'Subir', onclick: (e) => move(e.currentTarget.parentElement, -1) }, '▲'),
+      h('button.btn.ghost.sm.down', { type: 'button', 'aria-label': `Bajar ${colDef(c).label}`, title: 'Bajar', onclick: (e) => move(e.currentTarget.parentElement, 1) }, '▼'))));
     sortable(list, { handle: '.grip' });
     const m = modal({
       title: 'Columnas visibles', size: 'sm',
-      content: [h('p.muted.small', 'Marca las columnas que quieres ver y arrástralas para ordenarlas. El diseño se guarda para tu usuario.'), list],
+      content: [h('p.muted.small', 'Marca las columnas que quieres ver y arrástralas (o usa ▲ ▼) para ordenarlas. El diseño se guarda para tu usuario.'), list],
       footer: [h('button.btn.ghost', { onclick: async () => { columns = defaultCols(); await api(`/apps/${key}/layout/list`, { method: 'PUT', body: { reset: true } }); m.close(); draw(); } }, 'Restablecer'),
         h('div.spacer'), h('button.btn.primary', { onclick: () => {
           columns = [...list.children].filter((el) => el.querySelector('input').checked).map((el) => el.dataset.col);
@@ -727,9 +758,10 @@ export async function renderApp(root, key, onCountsChanged) {
           };
           const draw = () => {
             thumbs.classList.toggle('empty', !list.length);
-            clear(thumbs, list.length ? list.map((x, i) => h('div.img-thumb', { class: (x.id ? '' : 'new') + ((x.mime || (x.data || '').slice(5, 14)) === 'image/png' ? ' fit' : ''), title: x.name || '', onclick: () => imageViewer(list.map(urlOf), i) },
+            clear(thumbs, list.length ? list.map((x, i) => pressable(h('div.img-thumb', { class: (x.id ? '' : 'new') + ((x.mime || (x.data || '').slice(5, 14)) === 'image/png' ? ' fit' : ''), title: x.name || '', onclick: () => imageViewer(Object.assign(list.map(urlOf), { names: list.map((y, n) => y.name || `${f.label} ${n + 1}`) }), i) },
               h('img', { src: urlOf(x), alt: x.name || '', loading: 'lazy' }),
-              !dis ? h('button.x', { type: 'button', title: 'Quitar', onclick: (e) => { e.stopPropagation(); list.splice(i, 1); input.changed = true; draw(); } }, '✕') : null))
+              !dis ? h('button.x', { type: 'button', title: 'Quitar', 'aria-label': `Quitar imagen ${i + 1}`, onclick: (e) => { e.stopPropagation(); list.splice(i, 1); input.changed = true; draw(); announce('Imagen quitada'); } }, '✕') : null),
+              { label: `Ver imagen ${i + 1} de ${list.length}${x.name ? ': ' + x.name : ''}` }))
               : 'Sin imágenes');
           };
           draw();
@@ -749,10 +781,13 @@ export async function renderApp(root, key, onCountsChanged) {
           const box = h('div.sig-field');
           const meta2 = h('div.sig-meta');
           const draw = () => {
-            clear(box, val ? h('img', { src: val.img, alt: 'Firma' }) : h('span.muted', 'Sin firmar'));
+            clear(box, val ? h('img', { src: val.img, alt: val.at ? `Firmado el ${fmtDateTime(val.at)}` : 'Firmado (pendiente de guardar)' }) : h('span.muted', 'Sin firmar'));
             clear(meta2, val && val.at ? h('span', `Firmado el ${fmtDateTime(val.at)}`) : null,
-              !dis ? h('button.btn.sm', { type: 'button', onclick: async () => { const img = await signaturePad(f.label); if (img) { val = { img }; input.changed = true; draw(); } } }, val ? '✍ Volver a firmar' : '✍ Firmar') : null,
-              !dis && val ? h('button.btn.sm.ghost', { type: 'button', onclick: () => { val = null; input.changed = true; draw(); } }, 'Borrar') : null);
+              !dis ? h('button.btn.sm.sig-btn', { type: 'button', onclick: async () => {
+                const img = await signaturePad(f.label);
+                if (img) { val = { img }; input.changed = true; draw(); meta2.querySelector('.sig-btn').focus(); announce(`${f.label}: firmado. Recuerda guardar.`); }
+              } }, val ? '✍ Volver a firmar' : '✍ Firmar') : null,
+              !dis && val ? h('button.btn.sm.ghost', { type: 'button', 'aria-label': `Borrar ${f.label}`, onclick: () => { val = null; input.changed = true; draw(); meta2.querySelector('.sig-btn').focus(); announce(`${f.label}: firma borrada`); } }, 'Borrar') : null);
           };
           draw();
           extra = null;
@@ -862,7 +897,7 @@ export async function renderApp(root, key, onCountsChanged) {
     }
 
     const title = rec ? String(rec.data[meta.app.title_field] || meta.app.name) : `Nuevo · ${meta.app.name}`;
-    const m = modal({ title: [h('span', meta.app.icon || ''), rec ? h('span.num-badge', `Nº ${rec.number}`) : null, h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, title)], size: 'lg', tabs, content: [dataPane, historyPane] });
+    const m = modal({ title: [h('span', { 'aria-hidden': 'true' }, meta.app.icon || ''), rec ? h('span.num-badge', `Nº ${rec.number}`) : null, h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, title)], size: 'lg', tabs, content: [dataPane, historyPane] });
     const footer = [];
     if (rec && rec.deleted_at) {
       if (rec.can.restore) footer.push(h('button.btn.ok', { onclick: () => restoreRec(rec, () => m.close()) }, '↩ Restaurar'));
