@@ -333,7 +333,14 @@ router.post('/apps', wrap(async (req, res) => {
 router.put('/apps/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM apps WHERE id = ?', Number(req.params.id));
   if (!before) throw httpError(404, 'No encontrada');
-  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar', 'number_start']);
+  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar', 'number_start', 'status_field', 'closed_values', 'owner_field']);
+  const appF = Object.fromEntries((await appFields(before.id)).map((f) => [f.key, f]));
+  if ('status_field' in d) { d.status_field = d.status_field || null; if (d.status_field && !(appF[d.status_field] && appF[d.status_field].type === 'select')) throw httpError(400, 'El campo de estado debe ser una lista desplegable de la aplicación'); }
+  if ('owner_field' in d) { d.owner_field = d.owner_field || null; if (d.owner_field && !(appF[d.owner_field] && appF[d.owner_field].type === 'user')) throw httpError(400, 'El campo responsable debe ser de tipo usuario'); }
+  if ('closed_values' in d) {
+    const list = (Array.isArray(d.closed_values) ? d.closed_values : String(d.closed_values || '').split(/[,\n]/)).map((x) => String(x).trim()).filter(Boolean).slice(0, 30);
+    d.closed_values = JSON.stringify(list);
+  }
   if ('number_start' in d) { d.number_start = Math.round(Number(d.number_start)); if (!Number.isFinite(d.number_start) || d.number_start < 0 || d.number_start > 1e9) throw httpError(400, 'Inicio de numeración no válido'); }
   if ('active' in d) d.active = bool(d.active);
   if ('calendar' in d) d.calendar = bool(d.calendar);
@@ -448,9 +455,9 @@ function fieldData(b, isNew) {
     else if (!Number.isInteger(n) || n < 1 || n > 65000) throw httpError(400, 'Máximo de caracteres: número entre 1 y 65000');
     else d.max_length = n;
   }
-  if ('choices' in b || 'multiple' in b) {
+  if ('choices' in b || 'multiple' in b || 'due_alert' in b) {
     const choices = (Array.isArray(b.choices) ? b.choices : String(b.choices || '').split('\n')).map((s) => String(s).trim()).filter(Boolean);
-    d.options = JSON.stringify({ choices, ...('multiple' in b ? { multiple: bool(b.multiple) === 1 } : {}) });
+    d.options = JSON.stringify({ choices, ...('multiple' in b ? { multiple: bool(b.multiple) === 1 } : {}), ...('due_alert' in b ? { due_alert: bool(b.due_alert) === 1 } : {}) });
   }
   return d;
 }

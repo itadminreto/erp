@@ -14,7 +14,7 @@ const APPS = [
       ['email_asociado', 'Email asociado', 'email'],
       ['categoria', 'Categoría', 'select', { choices: ['Web', 'Software', 'Banca', 'Administración', 'Proveedor', 'Otro'] }],
       ['responsable', 'Responsable', 'user'],
-      ['caducidad', 'Caducidad', 'date'],
+      ['caducidad', 'Caducidad', 'date', { due_alert: true }],
       ['notas', 'Notas', 'textarea', { width: 'full', show_in_list: 0 }],
     ],
   },
@@ -47,7 +47,7 @@ const APPS = [
       ['wifi_password', 'Contraseña WiFi', 'password'],
       ['cuota_mensual', 'Cuota mensual (€)', 'decimal'],
       ['fecha_alta', 'Fecha de alta', 'date'],
-      ['permanencia_hasta', 'Permanencia hasta', 'date'],
+      ['permanencia_hasta', 'Permanencia hasta', 'date', { due_alert: true }],
     ],
   },
   {
@@ -78,10 +78,10 @@ const APPS = [
       ['tipo', 'Tipo', 'select', { choices: ['Turismo', 'Furgoneta', 'Camión', 'Moto', 'Otro'] }],
       ['bastidor', 'Nº bastidor', 'text', { show_in_list: 0 }],
       ['fecha_matriculacion', 'Fecha matriculación', 'date', { show_in_list: 0 }],
-      ['itv_proxima', 'Próxima ITV', 'date'],
+      ['itv_proxima', 'Próxima ITV', 'date', { due_alert: true }],
       ['seguro_compania', 'Aseguradora', 'text', { show_in_list: 0 }],
       ['seguro_poliza', 'Nº póliza', 'text', { show_in_list: 0 }],
-      ['seguro_vencimiento', 'Vencimiento seguro', 'date'],
+      ['seguro_vencimiento', 'Vencimiento seguro', 'date', { due_alert: true }],
       ['km', 'Kilómetros', 'number'],
       ['conductor', 'Conductor habitual', 'user'],
       ['tarjeta_combustible', 'Tarjeta combustible', 'text', { show_in_list: 0 }],
@@ -89,7 +89,7 @@ const APPS = [
     ],
   },
   {
-    key: 'recados', name: 'Recados', icon: '📋', color: '#8b5cf6', title: 'titulo', calendar: 1,
+    key: 'recados', name: 'Recados', icon: '📋', color: '#8b5cf6', title: 'titulo', calendar: 1, status: 'estado', closed: ['Hecho', 'Cancelado'], owner: 'asignado_a',
     description: 'Tareas, encargos y recados internos',
     fields: [
       ['titulo', 'Título', 'text', { required: 1, width: 'full' }],
@@ -98,7 +98,7 @@ const APPS = [
       ['asignado_a', 'Asignado a', 'user'],
       ['prioridad', 'Prioridad', 'select', { choices: ['Baja', 'Media', 'Alta', 'Urgente'] }],
       ['estado', 'Estado', 'select', { choices: ['Pendiente', 'En curso', 'Hecho', 'Cancelado'] }],
-      ['fecha_limite', 'Fecha límite', 'date'],
+      ['fecha_limite', 'Fecha límite', 'date', { due_alert: true }],
       ['fecha_realizado', 'Fecha realizado', 'date', { show_in_list: 0 }],
     ],
   },
@@ -120,13 +120,13 @@ async function seed() {
     if (!process.env.ADMIN_PASSWORD) console.log(`\n  ➜ Super admin creado: ${email} / ${pass}  (cámbiala tras el primer acceso)\n`);
 
     for (const [i, a] of APPS.entries()) {
-      const appId = Number((await run('INSERT INTO apps (`key`, name, icon, color, description, sort, title_field, calendar) VALUES (?,?,?,?,?,?,?,?)',
-        a.key, a.name, a.icon, a.color, a.description, i, a.title, a.calendar || 0)).lastInsertRowid);
+      const appId = Number((await run('INSERT INTO apps (`key`, name, icon, color, description, sort, title_field, calendar, status_field, closed_values, owner_field) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        a.key, a.name, a.icon, a.color, a.description, i, a.title, a.calendar || 0, a.status || null, a.closed ? JSON.stringify(a.closed) : null, a.owner || null)).lastInsertRowid);
       for (const [j, [key, label, type, o = {}]] of a.fields.entries()) {
-        const { choices, ...rest } = o;
+        const { choices, due_alert, ...rest } = o;
         await run(`INSERT INTO fields (app_id, \`key\`, label, type, options, required, unique_value, show_in_list, width, sort)
              VALUES (?,?,?,?,?,?,?,?,?,?)`,
-          appId, key, label, type, choices ? JSON.stringify({ choices }) : null,
+          appId, key, label, type, choices || due_alert ? JSON.stringify({ ...(choices ? { choices } : {}), ...(due_alert ? { due_alert: true } : {}) }) : null,
           rest.required || 0, rest.unique_value || 0, rest.show_in_list ?? 1,
           rest.width || (type === 'textarea' ? 'full' : 'md'), j);
       }

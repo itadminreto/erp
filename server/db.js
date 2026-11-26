@@ -286,6 +286,20 @@ async function init() {
     KEY idx_files_record (record_id),
     CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Estado (abierto/cerrado), responsable y avisos de vencimiento por app (una sola vez con valores por defecto)
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS status_field VARCHAR(50) NULL');
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS closed_values TEXT NULL');
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS owner_field VARCHAR(50) NULL');
+  const stDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_status_v1'");
+  if (!stDone.length) {
+    await pool.query(`UPDATE apps SET status_field = 'estado', closed_values = '["Hecho","Cancelado"]', owner_field = 'asignado_a' WHERE \`key\` = 'recados'`);
+    const due = [['recados', 'fecha_limite'], ['vehiculos', 'itv_proxima'], ['vehiculos', 'seguro_vencimiento'], ['credenciales', 'caducidad'], ['fibras', 'permanencia_hasta']];
+    for (const [app, fk] of due) {
+      await pool.query(`UPDATE fields f JOIN apps a ON a.id = f.app_id SET f.options = JSON_SET(COALESCE(NULLIF(f.options, ''), '{}'), '$.due_alert', true)
+        WHERE a.\`key\` = ? AND f.\`key\` = ? AND f.type = 'date'`, [app, fk]);
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_status_v1', '1')");
+  }
   // «IP fija» de Fibras pasa al nuevo tipo «Dirección IP» (una sola vez)
   const ipDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_ip_type_v1'");
   if (!ipDone.length) {

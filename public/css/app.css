@@ -389,3 +389,34 @@ input.invalid { border-color: var(--danger); outline-color: color-mix(in srgb, v
 .dz-btn .btn.act { width: 100%; pointer-events: none; min-height: 34px; }
 .dz-btn-desc { font-size: .72rem; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dz-btn .dz-tools { opacity: 1; }
+
+/* ---------- revisión: colores de estado, vencimientos, filtros ---------- */
+.chip.opt { background: color-mix(in srgb, var(--c) 14%, var(--surface)); color: color-mix(in srgb, var(--c) 75%, var(--text)); border-color: color-mix(in srgb, var(--c) 35%, transparent); font-weight: 600; }
+.chip.opt::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.due.over { color: var(--danger); font-weight: 700; }
+.due.soon { color: #d97706; font-weight: 600; }
+table.data tbody tr.closed td:not(.actions):not(.cb) { opacity: .6; }
+.rec-card.closed { opacity: .7; }
+table.data td.wrap { white-space: normal; min-width: 200px; max-width: 360px; line-height: 1.35; }
+.cal-ev.closed { opacity: .55; text-decoration: line-through; }
+.cal-ev.over { box-shadow: inset 0 0 0 1.5px var(--danger); }
+.btn.on-toggle { background: var(--primary-2); color: var(--primary); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); font-weight: 600; }
+.badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 9px; background: var(--primary); color: var(--primary-text); font-size: .7rem; padding: 0 5px; margin-left: 4px; }
+.active-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 10px; }
+.active-filters:empty { display: none; }
+.filter-chip { background: var(--primary-2); color: var(--primary); border-color: transparent; }
+.filter-chip button { border: 0; background: none; color: inherit; cursor: pointer; padding: 0 0 0 4px; font: inherit; }
+#toasts .toast:nth-last-child(n+4) { display: none; } /* como mucho 3 avisos a la vez */
+.home-stats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.home-stats .chip { cursor: pointer; }
+.home-stats .chip.danger { font-weight: 700; }
+/* la tabla usa el ancho que necesita cada columna (y se desplaza si no cabe) en vez de recortar */
+table.data { width: max-content; min-width: 100%; }
+@media (max-width: 760px) { .trash-toggle .lbl { display: none; } }
+table.data th, table.data td { padding-left: 10px; padding-right: 10px; }
+table.data td.wrap { max-width: 300px; min-width: 180px; }
+table.data th .grip { margin-right: 2px; }
+table.data td.actions { box-shadow: -8px 0 8px -8px rgba(16,24,40,.25); }
+/* el asa ⋮⋮ para mover columnas solo aparece al pasar el ratón: así no resta ancho a las columnas */
+table.data th .grip { display: inline-block; width: 0; overflow: hidden; vertical-align: bottom; transition: width .12s; }
+table.data thead:hover th .grip { width: 12px; }

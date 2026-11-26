@@ -519,3 +519,52 @@ test('botón de correo: envía el parte en PDF como adjunto (SMTP de pruebas)', 
     await new Promise((ok) => smtp.close(ok));
   }
 });
+
+test('revisión: búsqueda sin falsos positivos, abiertos/cerrados, míos, usuarios por empresa y permisos de correo', async () => {
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const me = (await admin.call('GET', '/me')).body;
+  const a = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Revisión A', estado: 'Pendiente', asignado_a: me.id, firma_del_cliente: png } });
+  const b = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Revisión B', estado: 'Hecho' } });
+  assert.equal(a.status, 201); assert.equal(b.status, 201);
+  // la búsqueda no entra en la firma (base64) ni en contraseñas cifradas
+  assert.equal((await admin.call('GET', '/apps/recados/records?q=iVBORw0KGgo')).body.total, 0);
+  assert.equal((await admin.call('GET', '/apps/vehiculos/records?q=enc:v1')).body.total, 0);
+  // se puede buscar por el nombre del usuario asignado
+  assert.ok((await admin.call('GET', '/apps/recados/records?q=Administrador')).body.rows.some((r) => r.id === a.body.id));
+  // abiertos / cerrados / míos
+  const open = (await admin.call('GET', '/apps/recados/records?state=open&size=500')).body.rows.map((r) => r.id);
+  const closed = (await admin.call('GET', '/apps/recados/records?state=closed&size=500')).body.rows.map((r) => r.id);
+  assert.ok(open.includes(a.body.id) && !open.includes(b.body.id));
+  assert.ok(closed.includes(b.body.id) && !closed.includes(a.body.id));
+  const mine = (await admin.call('GET', '/apps/recados/records?mine=1&size=500')).body.rows.map((r) => r.id);
+  assert.ok(mine.includes(a.body.id) && !mine.includes(b.body.id));
+  // resumen del inicio
+  const rec = (await admin.call('GET', '/apps')).body.find((x) => x.key === 'recados');
+  assert.ok(rec.stats.open >= 1 && rec.stats.mine >= 1 && 'overdue' in rec.stats);
+  // usuarios de otra empresa no aparecen en los desplegables
+  const other = await admin.call('POST', '/admin/companies', { name: 'Otra Empresa' });
+  const roles = (await admin.call('GET', '/admin/roles')).body.roles;
+  await admin.call('POST', '/admin/users', { name: 'Ajeno', email: 'ajeno@otra.com', password: 'ajenopass1', assignments: [{ company_id: other.body.id, role_id: roles[0].id }] });
+  const meta = await admin.call('GET', '/apps/recados', undefined, { company: ids.company });
+  assert.ok(!meta.body.users.some((u) => u.email === 'ajeno@otra.com'));
+  // configuración de estado validada
+  assert.equal((await admin.call('PUT', `/admin/apps/${rec.id}`, { status_field: 'titulo' })).status, 400);
+  // enviar por correo requiere exportar: Ana (Editor) sí; un rol de consulta no
+  const items = (await admin.call('GET', '/admin/apps')).body.find((x) => x.key === 'recados').fields.map((f) => f.key);
+  await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items: [...items, { button: { id: 'mailrev1', label: 'Enviar', action: 'email', to_fixed: 'x@test.com' } }] });
+  const consulta = roles.find((r) => r.name === 'Consulta');
+  await admin.call('POST', '/admin/users', { name: 'Solo Ver', email: 'ver@test.com', password: 'verpass123', assignments: [{ company_id: ids.company, role_id: consulta.id }] });
+  const ver = client(); await ver.login('ver@test.com', 'verpass123');
+  assert.equal((await ver.call('POST', `/apps/recados/records/${a.body.id}/action/mailrev1`)).status, 403);
+  await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items });
+});
+
+test('revisión: los registros de un usuario desactivado siguen mostrando su nombre', async () => {
+  const roles = (await admin.call('GET', '/admin/roles')).body.roles;
+  const u = await admin.call('POST', '/admin/users', { name: 'Temporal', email: 'temp@test.com', password: 'temppass12', assignments: [{ company_id: ids.company, role_id: roles[0].id }] });
+  await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'De Temporal', asignado_a: u.body.id } });
+  await admin.call('PUT', `/admin/users/${u.body.id}`, { active: false });
+  const meta = (await admin.call('GET', '/apps/recados')).body;
+  assert.ok(!meta.users.some((x) => x.id === u.body.id), 'no se ofrece para elegir');
+  assert.equal(meta.user_names[u.body.id], 'Temporal', 'pero se conoce su nombre');
+});

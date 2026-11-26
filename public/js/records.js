@@ -17,13 +17,13 @@ const META_COLS = {
 export async function renderApp(root, key, onCountsChanged) {
   const meta = await api('/apps/' + key);
   const fieldsByKey = Object.fromEntries(meta.fields.map((f) => [f.key, f]));
-  const usersById = Object.fromEntries(meta.users.map((u) => [u.id, u]));
+  const usersById = { ...Object.fromEntries(Object.entries(meta.user_names || {}).map(([id, name]) => [id, { id: Number(id), name: name + ' (inactivo)' }])), ...Object.fromEntries(meta.users.map((u) => [u.id, u])) };
   const P = meta.perms;
-  const st = { q: '', center: '', trash: false, sort: '', dir: 'desc', page: 1, size: 50, selected: new Set(), rows: [], total: 0, filters: {}, view: 'list', calMonth: '', calField: '', colorField: '' };
+  const st = { q: '', center: '', trash: false, sort: '', dir: 'desc', page: 1, size: 50, selected: new Set(), rows: [], total: 0, filters: {}, state: '', mine: false, overdue: false, view: 'list', calMonth: '', calField: '', colorField: '' };
   const persistKey = `view:${key}`;
   try { Object.assign(st, JSON.parse(sessionStorage.getItem(persistKey) || '{}'), { selected: new Set(), page: 1 }); } catch { /* sin estado previo */ }
   if (!P.view_trash) st.trash = false;
-  const saveSt = () => { try { sessionStorage.setItem(persistKey, JSON.stringify({ q: st.q, center: st.center, trash: st.trash, sort: st.sort, dir: st.dir, size: st.size, filters: st.filters, view: st.view, calMonth: st.calMonth, calField: st.calField, colorField: st.colorField })); } catch { /* ignorar */ } };
+  const saveSt = () => { try { sessionStorage.setItem(persistKey, JSON.stringify({ q: st.q, center: st.center, trash: st.trash, sort: st.sort, dir: st.dir, size: st.size, filters: st.filters, state: st.state, mine: st.mine, overdue: st.overdue, view: st.view, calMonth: st.calMonth, calField: st.calField, colorField: st.colorField })); } catch { /* ignorar */ } };
 
   // ----- calendario: campos de fecha y de color disponibles -----
   const dateFields = meta.app.calendar ? meta.fields.filter((f) => ['date', 'datetime'].includes(f.type)) : [];
@@ -32,6 +32,33 @@ export async function renderApp(root, key, onCountsChanged) {
   if (st.colorField !== '-' && !colorFields.some((f) => f.key === st.colorField)) st.colorField = (colorFields.find((f) => f.key === 'prioridad') || colorFields.find((f) => f.key === 'estado') || colorFields[0] || {}).key || '-';
   if (!dateFields.length) st.view = 'list';
   if (!/^\d{4}-\d{2}$/.test(st.calMonth)) st.calMonth = new Date().toISOString().slice(0, 7);
+
+  // ----- colores, estado (abierto/cerrado) y vencimientos -----
+  const PALETTE = ['#10b981', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'];
+  const closedVals = (meta.closed_values || []).map((x) => String(x).toLowerCase());
+  const OPEN_COLORS = ['#f59e0b', '#0ea5e9', '#8b5cf6', '#ec4899', '#14b8a6'], CLOSED_COLORS = ['#10b981', '#94a3b8', '#64748b'];
+  /** Color de una opción: en el campo de estado, abiertos en ámbar/azul y cerrados en verde/gris; en el resto, por orden. */
+  function choiceColor(f, v) {
+    const choices = f.options.choices || [];
+    if (f.key === meta.app.status_field && closedVals.length) {
+      const closedList = choices.filter((c) => closedVals.includes(c.toLowerCase())), openList = choices.filter((c) => !closedVals.includes(c.toLowerCase()));
+      const ci = closedList.indexOf(v); if (ci >= 0) return CLOSED_COLORS[ci % CLOSED_COLORS.length];
+      const oi = openList.indexOf(v); if (oi >= 0) return OPEN_COLORS[oi % OPEN_COLORS.length];
+      return '#94a3b8';
+    }
+    const i = choices.indexOf(v); return i < 0 ? '#94a3b8' : PALETTE[i % PALETTE.length];
+  }
+  const hasStatus = !!(meta.app.status_field && fieldsByKey[meta.app.status_field] && closedVals.length);
+  const hasOwner = !!(meta.app.owner_field && fieldsByKey[meta.app.owner_field]);
+  const isClosed = (r) => hasStatus && closedVals.includes(String(r.data[meta.app.status_field] || '').toLowerCase());
+  const todayISO = () => new Date().toISOString().slice(0, 10);
+  /** 'over' si la fecha ya pasó, 'soon' si vence en 3 días o menos (solo campos con aviso y registros abiertos). */
+  function dueState(r, f) {
+    const v = String(r.data[f.key] || '').slice(0, 10);
+    if (!v || !f.options.due_alert || isClosed(r) || r.deleted_at) return '';
+    const days = Math.round((new Date(v) - new Date(todayISO())) / 864e5);
+    return days < 0 ? 'over' : days <= 3 ? 'soon' : '';
+  }
 
   // ----- columnas (diseño por usuario) -----
   const defaultCols = () => ['_num', '_center', ...meta.fields.filter((f) => f.show_in_list).map((f) => f.key), '_updated_at'];
@@ -55,7 +82,7 @@ export async function renderApp(root, key, onCountsChanged) {
     meta.centers.map((c) => h('option', { value: c.id, selected: String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)),
     meta.can_view_without_center ? h('option', { value: 'none', selected: st.center === 'none' }, '(Sin centro)') : null);
   const trashCb = h('input', { type: 'checkbox', checked: st.trash, onchange: (e) => { st.trash = e.target.checked; st.page = 1; trashLbl.classList.toggle('on', st.trash); load(); } });
-  const trashLbl = h('label.check.trash-toggle', { class: st.trash ? 'on' : '', title: 'Mostrar también los registros borrados (en rojo)' }, trashCb, '🗑️ Ver papelera');
+  const trashLbl = h('label.check.trash-toggle', { class: st.trash ? 'on' : '', title: 'Mostrar también los registros borrados (en rojo)' }, trashCb, '🗑️', h('span.lbl', ' Ver papelera'));
 
   const exportMenu = P.export ? dropdown(h('button.btn', '⬇ ', h('span.lbl', 'Exportar')), [
     { label: '📊 Excel (.xlsx) — vista actual', onclick: () => doExport('xlsx') },
@@ -77,6 +104,51 @@ export async function renderApp(root, key, onCountsChanged) {
     load();
   }
 
+  // ----- filtros rápidos (abiertos/cerrados, míos) y panel de filtros -----
+  const stateSeg = hasStatus ? h('div.seg', { title: 'Mostrar según el estado' },
+    [['open', 'Abiertos'], ['closed', 'Cerrados'], ['', 'Todos']].map(([v, l]) => h('button', { class: st.state === v ? 'on' : '', dataset: { v }, onclick: () => {
+      st.state = v; st.page = 1; [...stateSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.v === v)); load();
+    } }, l))) : null;
+  const mineBtn = hasOwner ? h('button.btn', { class: st.mine ? 'on-toggle' : '', title: `Solo los que tengo en «${fieldsByKey[meta.app.owner_field].label}»`, onclick: () => {
+    st.mine = !st.mine; st.page = 1; mineBtn.classList.toggle('on-toggle', st.mine); load();
+  } }, '👤 Míos') : null;
+  const filterable = meta.fields.filter((f) => ['select', 'user', 'checkbox'].includes(f.type));
+  const filterBtn = filterable.length ? h('button.btn', { onclick: () => openFilters() }, '⚲ ', h('span.lbl', 'Filtros'), h('span.badge', { hidden: true })) : null;
+  const activeBar = h('div.active-filters');
+  const filterText = (k, v) => { const f = fieldsByKey[k]; if (!f) return v; return f.type === 'user' ? (usersById[v] ? usersById[v].name : v) : f.type === 'checkbox' ? (v === '1' ? 'Sí' : 'No') : v; };
+  function drawActiveFilters() {
+    const act = Object.entries(st.filters).filter(([k, v]) => v !== '' && fieldsByKey[k]);
+    if (filterBtn) { const bd = filterBtn.querySelector('.badge'); bd.hidden = !act.length; bd.textContent = act.length; }
+    clear(activeBar, st.overdue ? h('span.chip.filter-chip', '⚠ Solo vencidos', h('button', { title: 'Quitar filtro', onclick: () => { st.overdue = false; st.page = 1; drawActiveFilters(); load(); } }, '✕')) : null,
+      act.map(([k, v]) => h('span.chip.filter-chip', `${fieldsByKey[k].label}: ${filterText(k, v)}`,
+      h('button', { title: 'Quitar filtro', onclick: () => { delete st.filters[k]; st.page = 1; drawActiveFilters(); load(); } }, '✕'))),
+    act.length > 1 ? h('button.btn.sm.ghost', { onclick: () => { st.filters = {}; st.page = 1; drawActiveFilters(); load(); } }, 'Quitar todos') : null);
+  }
+  function openFilters() {
+    const sels = {};
+    const content = h('div.two-col', filterable.map((f) => {
+      const cur = st.filters[f.key] ?? '';
+      const opts = f.type === 'select' ? (f.options.choices || []).map((c) => [c, c])
+        : f.type === 'user' ? meta.users.map((u) => [String(u.id), u.name]) : [['1', 'Sí'], ['0', 'No']];
+      sels[f.key] = h('select', h('option', { value: '' }, '— Cualquiera —'), opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === v }, l)));
+      return h('div.field', h('label', f.label), sels[f.key]);
+    }));
+    const m = modal({ title: '⚲ Filtros', size: '', content,
+      footer: [h('button.btn.ghost', { onclick: () => { Object.values(sels).forEach((x) => { x.value = ''; }); } }, 'Limpiar'), h('div.spacer'),
+        h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
+        h('button.btn.primary', { onclick: () => {
+          st.filters = Object.fromEntries(Object.entries(sels).map(([k, x]) => [k, x.value]).filter(([, v]) => v !== ''));
+          st.page = 1; drawActiveFilters(); m.close(); load();
+        } }, 'Aplicar')] });
+  }
+  // menú «⋯» para el móvil (importar, exportar, imprimir)
+  const moreMenu = dropdown(h('button.btn', { title: 'Más acciones' }, '⋯'), [
+    P.import ? { label: '⬆ Importar', onclick: () => openImport() } : null,
+    P.export ? { label: '📊 Exportar a Excel', onclick: () => doExport('xlsx') } : null,
+    P.export ? { label: '📄 Exportar a CSV', onclick: () => doExport('csv') } : null,
+    { label: '🖨 Imprimir', onclick: () => (st.view === 'calendar' ? printCalendar() : printList()) },
+  ]);
+
   const bulkBar = h('div.bulkbar', { hidden: true });
   const tableWrap = h('div.table-wrap.desktop-only');
   const mobileList = h('div.mobile-list');
@@ -86,9 +158,10 @@ export async function renderApp(root, key, onCountsChanged) {
   colsBtn.hidden = st.view !== 'list'; trashLbl.hidden = st.view !== 'list';
 
   clear(root,
-    h('div.page-head', titleEl, h('div.btn-group', importBtn, exportMenu, printBtn, newBtn)),
-    h('div.toolbar', h('div.search', searchInp), meta.centers.length ? centerSel : null, P.view_trash ? trashLbl : null, h('div.spacer'), viewBtns, colsBtn),
-    bulkBar, listCard, calCard);
+    h('div.page-head', titleEl, h('div.btn-group', h('div.btn-group.desktop-only', importBtn, exportMenu, printBtn), h('div.mobile-only', moreMenu), newBtn)),
+    h('div.toolbar', h('div.search', searchInp), meta.centers.length ? centerSel : null, stateSeg, mineBtn, filterBtn, P.view_trash ? trashLbl : null, h('div.spacer'), viewBtns, colsBtn),
+    activeBar, bulkBar, listCard, calCard);
+  drawActiveFilters();
 
   // ----- carga -----
   async function load() {
@@ -100,6 +173,9 @@ export async function renderApp(root, key, onCountsChanged) {
     if (st.trash) qs.set('trash', '1');
     if (st.sort) { qs.set('sort', st.sort); qs.set('dir', st.dir); }
     for (const [k, v] of Object.entries(st.filters)) if (v !== '') qs.set('f_' + k, v);
+    if (st.state) qs.set('state', st.state);
+    if (st.mine) qs.set('mine', '1');
+    if (st.overdue) qs.set('overdue', '1');
     try {
       const r = await api(`/apps/${key}/records?${qs}`);
       st.rows = r.rows; st.total = r.total;
@@ -125,6 +201,9 @@ export async function renderApp(root, key, onCountsChanged) {
     if (st.q) qs.set('q', st.q);
     if (st.center) qs.set('center', st.center);
     for (const [k, v] of Object.entries(st.filters)) if (v !== '') qs.set('f_' + k, v);
+    if (st.state) qs.set('state', st.state);
+    if (st.mine) qs.set('mine', '1');
+    if (st.overdue) qs.set('overdue', '1');
     return qs;
   }
   function filterSummary() {
@@ -214,7 +293,7 @@ export async function renderApp(root, key, onCountsChanged) {
   }
 
   // ----- calendario -----
-  const PALETTE = ['#10b981', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'];
+
   const DOW = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
   const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   function monthGrid() {
@@ -228,8 +307,7 @@ export async function renderApp(root, key, onCountsChanged) {
   }
   function colorOf(r) {
     if (st.colorField === '-') return meta.app.color || '#6366f1';
-    const f = fieldsByKey[st.colorField]; const i = (f.options.choices || []).indexOf(r.data[st.colorField]);
-    return i < 0 ? '#94a3b8' : PALETTE[i % PALETTE.length];
+    return choiceColor(fieldsByKey[st.colorField], r.data[st.colorField]);
   }
   const titleOf = (r) => String(r.data[meta.app.title_field] || `Nº ${r.number}`);
   let calRows = [];
@@ -254,7 +332,8 @@ export async function renderApp(root, key, onCountsChanged) {
     const dateSel = h('select', { onchange: (e) => { st.calField = e.target.value; load(); } }, dateFields.map((f) => h('option', { value: f.key, selected: f.key === st.calField }, f.label)));
     const colorSel = h('select', { onchange: (e) => { st.colorField = e.target.value; saveSt(); drawCalendar(); } },
       h('option', { value: '-' }, 'Sin color'), colorFields.map((f) => h('option', { value: f.key, selected: f.key === st.colorField }, f.label)));
-    const chip = (r) => h('button.cal-ev', { style: { '--c': colorOf(r) }, title: titleOf(r), onclick: (e) => { e.stopPropagation(); openRecord(r); } }, titleOf(r));
+    const chip = (r) => h('button.cal-ev', { class: [isClosed(r) ? 'closed' : '', fieldsByKey[st.calField] && dueState(r, fieldsByKey[st.calField]) === 'over' ? 'over' : ''].join(' '),
+      style: { '--c': colorOf(r) }, title: titleOf(r), onclick: (e) => { e.stopPropagation(); openRecord(r); } }, titleOf(r));
     const MAX = 3;
     const grid = h('div.cal-grid',
       DOW.map((d) => h('div.cal-dow', d)),
@@ -273,7 +352,7 @@ export async function renderApp(root, key, onCountsChanged) {
     const agenda = h('div.cal-agenda', daysWith.length ? daysWith.map((d) => h('div.cal-agenda-day',
       h('div.cal-agenda-date', { class: iso(d) === today ? 'today' : '' }, d.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })),
       h('div', map[iso(d)].map(chip)))) : h('div.empty', 'Nada este mes'));
-    const legend = st.colorField !== '-' ? h('div.cal-legend', (fieldsByKey[st.colorField].options.choices || []).map((c, i) => h('span', { style: { '--c': PALETTE[i % PALETTE.length] } }, c))) : null;
+    const legend = st.colorField !== '-' ? h('div.cal-legend', (fieldsByKey[st.colorField].options.choices || []).map((c, i) => h('span', { style: { '--c': choiceColor(fieldsByKey[st.colorField], c) } }, c))) : null;
     clear(calCard,
       h('div.cal-head',
         h('div.row', h('button.btn.sm', { onclick: () => shift(-1) }, '‹'), h('button.btn.sm', { onclick: () => { st.calMonth = today.slice(0, 7); load(); } }, 'Hoy'), h('button.btn.sm', { onclick: () => shift(1) }, '›'),
@@ -292,7 +371,7 @@ export async function renderApp(root, key, onCountsChanged) {
     const body = `<table class="cal"><thead><tr>${DOW.map((d) => `<th>${d}</th>`).join('')}</tr></thead><tbody>
       ${weeks.map((w) => `<tr>${w.map((d) => `<td class="${d.getMonth() !== m - 1 ? 'out' : ''}"><div class="d">${d.getDate()}</div>${(map[iso(d)] || []).map((r) => `<div class="ev" style="border-color:${colorOf(r)}">${esc(titleOf(r))}</div>`).join('')}</td>`).join('')}</tr>`).join('')}
       </tbody></table>
-      ${st.colorField !== '-' ? `<div class="legend">${(fieldsByKey[st.colorField].options.choices || []).map((c, i) => `<span style="--c:${PALETTE[i % PALETTE.length]}">${esc(c)}</span>`).join('')}</div>` : ''}`;
+      ${st.colorField !== '-' ? `<div class="legend">${(fieldsByKey[st.colorField].options.choices || []).map((c, i) => `<span style="--c:${choiceColor(fieldsByKey[st.colorField], c)}">${esc(c)}</span>`).join('')}</div>` : ''}`;
     const title = `${meta.app.name} · ${new Date(y, m - 1, 1).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}`;
     printDoc({ title, subtitle: [fieldsByKey[st.calField].label, filterSummary()].filter(Boolean).join(' · '), bodyHtml: body, landscape: true });
   }
@@ -316,12 +395,12 @@ export async function renderApp(root, key, onCountsChanged) {
           try { const { value } = await api(`/apps/${key}/records/${r.id}/password/${c}`); span.textContent = value; span.classList.remove('pw-mask'); e.target.replaceWith(h('button.btn.ghost.sm', { title: 'Copiar', onclick: (ev) => { ev.stopPropagation(); copy(value); } }, '📋')); } catch (err) { toastErr(err); }
         } }, '👁'));
       }
-      case 'date': return fmtDate(v);
+      case 'date': { const d = dueState(r, f); return d ? h('span.due', { class: d, title: d === 'over' ? 'Vencido' : 'Vence pronto' }, d === 'over' ? '⚠ ' : '', fmtDate(v)) : fmtDate(v); }
       case 'datetime': return fmtDateTime(v);
       case 'checkbox': return v ? '✔' : '—';
       case 'user': return usersById[v] ? usersById[v].name : `#${v}`;
       case 'multiselect': return v.join(', ');
-      case 'select': return h('span.chip', v);
+      case 'select': return h('span.chip.opt', { style: { '--c': choiceColor(f, v) } }, v);
       case 'url': return h('a', { href: v, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, v.replace(/^https?:\/\//, ''));
       case 'email': return h('a', { href: 'mailto:' + v, onclick: (e) => e.stopPropagation() }, v);
       case 'phone': return h('a', { href: 'tel:' + v, onclick: (e) => e.stopPropagation() }, v);
@@ -346,9 +425,9 @@ export async function renderApp(root, key, onCountsChanged) {
         onclick: () => { if (!c.sortKey) return; if (st.sort === c.sortKey) st.dir = st.dir === 'asc' ? 'desc' : 'asc'; else { st.sort = c.sortKey; st.dir = 'asc'; } load(); },
       }, h('span.grip', '⋮⋮'), c.label, st.sort && st.sort === c.sortKey ? h('span.sort', st.dir === 'asc' ? '▲' : '▼') : null)),
       h('th.nosort', ''));
-    const tbody = h('tbody', st.rows.map((r) => h('tr', { class: r.deleted_at ? 'deleted' : '', onclick: () => openRecord(r) },
+    const tbody = h('tbody', st.rows.map((r) => h('tr', { class: [r.deleted_at ? 'deleted' : '', isClosed(r) ? 'closed' : ''].join(' '), onclick: () => openRecord(r) },
       h('td.cb', { onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox', checked: st.selected.has(r.id), onchange: (e) => { e.target.checked ? st.selected.add(r.id) : st.selected.delete(r.id); drawBulk(); } })),
-      cols.map((c) => h('td', { title: typeof cellValue(r, c.key, { reveal: false }) === 'string' ? cellValue(r, c.key) : '' }, cellValue(r, c.key))),
+      cols.map((c) => h('td', { class: c.key === meta.app.title_field ? 'wrap' : '', title: typeof cellValue(r, c.key, { reveal: false }) === 'string' ? cellValue(r, c.key) : '' }, cellValue(r, c.key))),
       h('td.actions', { onclick: (e) => e.stopPropagation() }, rowActions(r)))));
     const table = h('table.data', h('thead', headRow), tbody);
     clear(tableWrap, st.rows.length ? table : emptyState());
@@ -359,9 +438,9 @@ export async function renderApp(root, key, onCountsChanged) {
 
     // tarjetas (móvil)
     const titleKey = meta.app.title_field || (meta.fields[0] && meta.fields[0].key);
-    clear(mobileList, st.rows.length ? st.rows.map((r) => h('div.card.rec-card', { class: r.deleted_at ? 'deleted' : '', onclick: () => openRecord(r) },
+    clear(mobileList, st.rows.length ? st.rows.map((r) => h('div.card.rec-card', { class: [r.deleted_at ? 'deleted' : '', isClosed(r) ? 'closed' : ''].join(' '), onclick: () => openRecord(r) },
       h('div.t', r.deleted_at ? '🗑️' : null, h('span.num', `${r.number}`), h('span', { style: { flex: 1 } }, String(r.data[titleKey] || '')), h('span.muted.small', r.center_code || r.center_name || '')),
-      h('div.kv', columns.filter((c) => c !== titleKey && c !== '_center').slice(0, 5).map((c) => [h('span', colDef(c).label), h('span', cellValue(r, c, { reveal: false }) || '—')])),
+      h('div.kv', columns.filter((c) => c !== titleKey && c !== '_center' && c !== '_num').slice(0, 5).map((c) => [h('span', colDef(c).label), h('span', cellValue(r, c, { reveal: false }) || '—')])),
       r.deleted_at && r.can.restore ? h('div', h('button.btn.sm.ok', { onclick: (e) => { e.stopPropagation(); restoreRec(r); } }, '↩ Restaurar')) : null,
     )) : emptyState());
 
@@ -432,6 +511,10 @@ export async function renderApp(root, key, onCountsChanged) {
     if (st.center) qs.set('center', st.center);
     if (st.trash) qs.set('trash', '1');
     if (st.sort) { qs.set('sort', st.sort); qs.set('dir', st.dir); }
+    for (const [k, v] of Object.entries(st.filters)) if (v !== '') qs.set('f_' + k, v);
+    if (st.state) qs.set('state', st.state);
+    if (st.mine) qs.set('mine', '1');
+    if (st.overdue) qs.set('overdue', '1');
     if (passwords) qs.set('passwords', '1');
     if (ids) qs.set('ids', ids.join(','));
     download(`/apps/${key}/export?${qs}`, `${key}.${format}`);
@@ -547,9 +630,9 @@ export async function renderApp(root, key, onCountsChanged) {
       });
     }
     function buildActionButton(b) {
-      const allowed = { set_fields: editable, open_url: true, email: !!rec, print: !!rec, duplicate: P.create }[b.action];
+      const allowed = { set_fields: editable, open_url: true, email: !!rec && P.export, print: !!rec, duplicate: P.create }[b.action];
       const btn = h('button.btn.act', { type: 'button', class: 'act-' + (b.color || 'primary'), disabled: !allowed,
-        title: !allowed ? (b.action === 'set_fields' ? 'Sin permiso de edición' : 'Guarda el registro primero') : '' },
+        title: !allowed ? (b.action === 'set_fields' ? 'Sin permiso de edición' : b.action === 'email' && rec ? 'Necesitas permiso de exportación' : 'Guarda el registro primero') : '' },
       b.icon ? h('span', b.icon) : null, b.label);
       btn.addEventListener('click', async () => {
         if (b.confirm && !(await confirmDlg(fillTemplate(b.confirm), { ok: b.label, title: b.label }))) return;
@@ -822,6 +905,10 @@ export async function renderApp(root, key, onCountsChanged) {
         const f = fieldsByKey[field];
         if (f && f.type === 'user' && usersById[v]) return usersById[v].name;
         if (f && f.type === 'checkbox') return v === true || v === 1 ? 'Sí' : v === false || v === 0 ? 'No' : String(v);
+        if (f && f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(v))) return fmtDate(v);
+        if (f && f.type === 'datetime' && v) return fmtDateTime(v);
+        if (f && f.type === 'signature' && v) return String(v).startsWith('Firmado') ? `Firmado ${fmtDateTime(String(v).replace(/^Firmado \(|\)$/g, ''))}` : String(v);
+        if (f && f.type === 'image' && v) return String(v).replace(/\s*\(.*\)$/, '');
         if (Array.isArray(v)) return v.join(', ');
         return v === '' || v === null || v === undefined ? '—' : String(v);
       };

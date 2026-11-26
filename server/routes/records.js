@@ -25,6 +25,11 @@ function jv(key, alias = 'r') {
 }
 
 const activeUsers = () => all('SELECT id, name, email, phone FROM users WHERE deleted_at IS NULL ORDER BY name');
+/** Usuarios que se ofrecen en los desplegables: solo los de la empresa activa (y uno mismo). */
+const companyUsers = (req) => all(`SELECT DISTINCT u.id, u.name, u.email, u.phone FROM users u
+  LEFT JOIN user_assignments a ON a.user_id = u.id AND a.company_id = ?
+  WHERE u.deleted_at IS NULL AND u.active = 1 AND (a.id IS NOT NULL OR u.id = ?) ORDER BY u.name`, req.companyId, req.user.id);
+const closedValues = (app) => { try { const v = JSON.parse(app.closed_values || '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
 const companyCenters = (companyId) => all('SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL AND active = 1 ORDER BY code, name', companyId);
 /** Centros que el usuario puede ver en esta app (los de sus asignaciones; todos si tiene acceso a toda la empresa). */
 const visibleCenters = async (req) => (await companyCenters(req.companyId)).filter((c) => can(req.grants, 'view', req.user, { center_id: c.id }));
@@ -184,8 +189,24 @@ router.get('/', wrap(async (req, res) => {
     const g = await grantsFor(req.user, req.companyId, a.id);
     if (!g.view.length) continue;
     const f = sqlFilter(g, 'view', req.user);
-    const n = (await get(`SELECT COUNT(*) n FROM records r WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND ${f.sql}`, a.id, req.companyId, ...f.params)).n;
-    out.push({ ...a, count: n, perms: summary(g) });
+    const base = `FROM records r WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND ${f.sql}`;
+    const bp = [a.id, req.companyId, ...f.params];
+    const n = (await get(`SELECT COUNT(*) n ${base}`, ...bp)).n;
+    const stats = {};
+    const fields = await appFields(a.id);
+    const closed = closedValues(a);
+    const openSql = a.status_field && closed.length && fields.some((x) => x.key === a.status_field)
+      ? ` AND COALESCE(${jv(a.status_field)}, '') NOT IN (${closed.map(() => '?').join(',')})` : '';
+    if (openSql) stats.open = (await get(`SELECT COUNT(*) n ${base}${openSql}`, ...bp, ...closed)).n;
+    const dueF = fields.filter((x) => x.type === 'date' && x.options.due_alert);
+    if (dueF.length) {
+      stats.overdue = (await get(`SELECT COUNT(*) n ${base}${openSql} AND (${dueF.map((x) => `${jv(x.key)} < CURDATE()`).join(' OR ')})`, ...bp, ...(openSql ? closed : []))).n;
+    }
+    if (a.owner_field && fields.some((x) => x.key === a.owner_field)) {
+      stats.mine = (await get(`SELECT COUNT(*) n ${base}${openSql} AND ${jv(a.owner_field)} = ?`, ...bp, ...(openSql ? closed : []), String(req.user.id))).n;
+    }
+    delete a.form_layout; // no hace falta en el menú
+    out.push({ ...a, count: n, stats, perms: summary(g) });
   }
   res.json(out);
 }));
@@ -202,7 +223,9 @@ router.get('/:appKey', wrap(async (req, res) => {
     app: req.appDef, fields: req.fields, perms: summary(req.grants),
     can_create_without_center: can(req.grants, 'create', req.user, { center_id: null }),
     can_view_without_center: can(req.grants, 'view', req.user, { center_id: null }),
-    centers, users: await activeUsers(), layouts,
+    centers, users: await companyUsers(req), layouts, closed_values: closedValues(req.appDef),
+    // nombres de todos los usuarios de la empresa (también desactivados) para mostrar registros antiguos
+    user_names: Object.fromEntries((await all(`SELECT DISTINCT u.id, u.name FROM users u JOIN user_assignments a ON a.user_id = u.id AND a.company_id = ?`, req.companyId)).map((u) => [u.id, u.name])),
   });
 }));
 
@@ -237,11 +260,33 @@ function listQuery(req, q) {
     else { where.push('r.center_id = ?'); params.push(Number(q.center)); }
   }
   if (q.q) {
+    // Se busca solo en el texto visible de cada campo: nunca dentro de contraseñas cifradas, firmas o imágenes
+    const text = req.fields.filter((f) => !['password', 'signature', 'image', 'user'].includes(f.type))
+      .map((f) => (f.type === 'multiselect' ? `JSON_EXTRACT(r.data, '$.${f.key}')` : jv(f.key)));
+    const userF = req.fields.filter((f) => f.type === 'user');
     const terms = String(q.q).trim().split(/\s+/).slice(0, 5);
     for (const t of terms) {
-      where.push(`(r.data LIKE ? OR c.name LIKE ? OR c.code LIKE ? OR CAST(r.number AS CHAR) = ?)`);
+      const ors = [`CONCAT_WS(' ', ${text.length ? text.join(', ') : "''"}) LIKE ?`, 'c.name LIKE ?', 'c.code LIKE ?', 'CAST(r.number AS CHAR) = ?'];
       params.push(`%${t}%`, `%${t}%`, `%${t}%`, t);
+      for (const f of userF) { ors.push(`EXISTS (SELECT 1 FROM users su WHERE su.id = ${jv(f.key)} AND su.name LIKE ?)`); params.push(`%${t}%`); }
+      where.push(`(${ors.join(' OR ')})`);
     }
+  }
+  // abiertos / cerrados según el campo de estado de la app
+  const closed = closedValues(req.appDef);
+  if (req.appDef.status_field && closed.length && ['open', 'closed'].includes(q.state)) {
+    const sv = `COALESCE(${jv(req.appDef.status_field)}, '')`;
+    where.push(`${sv} ${q.state === 'open' ? 'NOT ' : ''}IN (${closed.map(() => '?').join(',')})`);
+    params.push(...closed);
+  }
+  // vencidos: alguna fecha con aviso de vencimiento ya pasada
+  if (q.overdue === '1') {
+    const dueF = req.fields.filter((f) => f.type === 'date' && f.options.due_alert);
+    where.push(dueF.length ? `(${dueF.map((f) => `${jv(f.key)} < CURDATE()`).join(' OR ')})` : '0');
+  }
+  // «míos»: el campo responsable soy yo
+  if (q.mine === '1' && req.appDef.owner_field && req.fields.some((f) => f.key === req.appDef.owner_field)) {
+    where.push(`${jv(req.appDef.owner_field)} = ?`); params.push(String(req.user.id));
   }
   // rango de fechas (vista calendario): date_field, from, to (AAAA-MM-DD)
   if (q.date_field) {
@@ -432,6 +477,7 @@ router.post('/:appKey/records/:id/action/:bid', wrap(async (req, res) => {
   try { layout = req.appDef.form_layout ? JSON.parse(req.appDef.form_layout) : {}; } catch { layout = {}; }
   const item = (layout.items || []).find((x) => x && x.button && x.button.id === req.params.bid);
   if (!item || item.button.action !== 'email') throw httpError(404, 'Acción no encontrada');
+  if (!can(req.grants, 'export', req.user, rec)) throw httpError(403, 'Enviar datos por correo requiere permiso de exportación');
   const b = item.button;
   const data = JSON.parse(rec.data || '{}');
   const to = [b.to_field ? data[b.to_field] : '', b.to_fixed].filter(Boolean).join(', ');

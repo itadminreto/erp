@@ -310,6 +310,9 @@ export async function renderAppsAdmin(root, onChange) {
       { key: 'name', label: 'Nombre', value: a.name }, { key: 'icon', label: 'Icono (emoji)', value: a.icon }, { key: 'color', label: 'Color', type: 'color', value: a.color },
       { key: 'description', label: 'Descripción', value: a.description },
       { key: 'title_field', label: 'Campo título (identifica cada registro)', type: 'select', value: a.title_field, options: a.fields.filter((f) => f.type !== 'password').map((f) => ({ value: f.key, label: f.label })) },
+      { key: 'status_field', label: 'Campo de estado (para «Abiertos / Cerrados»)', type: 'select', value: a.status_field || '', options: [{ value: '', label: '— Ninguno —' }, ...a.fields.filter((f) => f.type === 'select').map((f) => ({ value: f.key, label: f.label }))] },
+      { key: 'closed_values', label: 'Valores del estado que cierran el registro', value: (() => { try { return JSON.parse(a.closed_values || '[]').join(', '); } catch { return ''; } })(), placeholder: 'Hecho, Cancelado', help: 'Separados por comas. Los registros cerrados no avisan de vencimiento y salen atenuados.' },
+      { key: 'owner_field', label: 'Campo responsable (para «Míos»)', type: 'select', value: a.owner_field || '', options: [{ value: '', label: '— Ninguno —' }, ...a.fields.filter((f) => f.type === 'user').map((f) => ({ value: f.key, label: f.label }))] },
       { key: 'number_start', label: 'Numeración: empieza en', type: 'number', value: a.number_start ?? 1000, help: 'Primer número de registro (Nº de trabajo). Si ya hay números mayores, se sigue desde el último.' },
       { key: 'calendar', label: 'Vista calendario (necesita algún campo de fecha)', type: 'checkbox', value: !!a.calendar },
       { key: 'active', label: 'Aplicación activa', type: 'checkbox', value: !!a.active }]);
@@ -334,10 +337,13 @@ export async function renderAppsAdmin(root, onChange) {
     const cb = (v) => h('input', { type: 'checkbox', checked: !!v });
     const required = cb(f && f.required), unique = cb(f && f.unique_value), inList = cb(f ? f.show_in_list : true), active = cb(f ? f.active : true);
     const multiple = cb(f && f.options && f.options.multiple);
+    const dueAlert = cb(f && f.options && f.options.due_alert);
+    const dueLbl = h('label.check', dueAlert, 'Avisar de vencimiento (en rojo si ya pasó, en naranja si faltan 3 días o menos)');
     const multipleLbl = h('label.check', multiple, 'Permitir varias imágenes (hasta 20)');
     const sync = () => {
       choicesField.hidden = !['select', 'multiselect'].includes(type.value);
       multipleLbl.hidden = type.value !== 'image';
+      dueLbl.hidden = type.value !== 'date';
       maxLenField.hidden = !['text', 'textarea', 'email', 'phone', 'url', 'password'].includes(type.value);
     };
     type.onchange = sync; sync();
@@ -345,9 +351,9 @@ export async function renderAppsAdmin(root, onChange) {
       title: f ? `Campo · ${f.label}` : `Nuevo campo en ${target.name}`, size: 'sm',
       content: h('div.stack', h('div.field', h('label', 'Etiqueta *'), label), h('div.field', h('label', 'Clave interna'), key),
         h('div.field', h('label', 'Tipo'), type), choicesField, h('div.field', h('label', 'Ancho en el formulario'), width, h('div.help', 'Proporción de la fila en pantallas anchas; en el móvil se ajusta solo.')), maxLenField, h('div.field', h('label', 'Texto de ayuda'), help),
-        h('div.stack', { style: { gap: '8px' } }, h('label.check', required, 'Obligatorio'), h('label.check', unique, 'Valor único (no se permiten duplicados)'), h('label.check', inList, 'Mostrar en el listado por defecto'), multipleLbl, f ? h('label.check', active, 'Activo') : null)),
+        h('div.stack', { style: { gap: '8px' } }, h('label.check', required, 'Obligatorio'), h('label.check', unique, 'Valor único (no se permiten duplicados)'), h('label.check', inList, 'Mostrar en el listado por defecto'), multipleLbl, dueLbl, f ? h('label.check', active, 'Activo') : null)),
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
-        const body = { label: label.value, type: type.value, width: widthVal, max_length: maxLenField.hidden ? '' : maxLen.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value, ...(type.value === 'image' ? { multiple: multiple.checked } : {}) };
+        const body = { label: label.value, type: type.value, width: widthVal, max_length: maxLenField.hidden ? '' : maxLen.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value, ...(type.value === 'image' ? { multiple: multiple.checked } : {}), ...(type.value === 'date' ? { due_alert: dueAlert.checked } : {}) };
         if (f) body.active = active.checked; else if (key.value) body.key = key.value;
         try { if (f) await target.update(f, body); else await target.create(body); toast('Campo guardado', 'ok'); m.close(); reload(); } catch (e) { toastErr(e); }
       } }, 'Guardar')],

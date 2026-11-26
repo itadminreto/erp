@@ -113,8 +113,27 @@ function renderHome() {
     h('div.page-head', h('div.title', h('div', h('h1', `Hola, ${state.me.name.split(' ')[0]}`), h('div.muted', company ? company.name : 'Sin empresa asignada')))),
     state.apps.length ? h('div.grid-cards', state.apps.map((a) => h('a.card.app-card', { href: '#/app/' + a.key },
       h('div.top', h('div.app-ico', { style: { width: '44px', height: '44px', borderRadius: '12px', display: 'grid', placeItems: 'center', fontSize: '22px', background: a.color + '22' } }, a.icon), h('span.big', a.count)),
-      h('div', h('h2', a.name), h('div.muted.small', a.description || ''))))) :
+      h('div', h('h2', a.name), h('div.muted.small', a.description || '')), homeStats(a)))) :
       h('div.card.empty', h('div.big', '🔒'), h('p', 'No tienes acceso a ninguna aplicación en esta empresa.'), h('p.muted.small', 'Pide a un administrador que te asigne un rol.')));
+}
+
+/** Resumen en la tarjeta de inicio: abiertos, vencidos y míos (al pulsar, abre la lista ya filtrada). */
+function homeStats(a) {
+  const s = a.stats || {};
+  const go = (view) => (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try {
+      const k = `view:${a.key}`; const cur = JSON.parse(sessionStorage.getItem(k) || '{}');
+      sessionStorage.setItem(k, JSON.stringify({ ...cur, q: '', filters: {}, view: 'list', state: '', mine: false, overdue: false, ...view }));
+    } catch { /* sin almacenamiento */ }
+    location.hash = '#/app/' + a.key;
+  };
+  const items = [
+    s.open !== undefined ? h('span.chip', { onclick: go({ state: 'open' }) }, `${s.open} abierto${s.open === 1 ? '' : 's'}`) : null,
+    s.overdue ? h('span.chip.danger', { onclick: go({ state: s.open !== undefined ? 'open' : '', overdue: true }) }, `⚠ ${s.overdue} vencido${s.overdue === 1 ? '' : 's'}`) : null,
+    s.mine ? h('span.chip', { onclick: go({ state: s.open !== undefined ? 'open' : '', mine: true }) }, `👤 ${s.mine} mío${s.mine === 1 ? '' : 's'}`) : null,
+  ].filter(Boolean);
+  return items.length ? h('div.home-stats', items) : null;
 }
 
 function changePassword(forced) {
