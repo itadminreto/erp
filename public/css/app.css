@@ -375,3 +375,17 @@ input.invalid { border-color: var(--danger); outline-color: color-mix(in srgb, v
 .viewer { display: grid; place-items: center; background: #111827; border-radius: 10px; min-height: 50vh; }
 .viewer-img { max-width: 100%; max-height: 72vh; object-fit: contain; }
 .img-thumb.fit img { object-fit: contain; padding: 4px; } /* PNG (firmas, logos): se muestran enteras */
+
+/* ---------- botones de acción del diseño ---------- */
+.btn-cell > label { visibility: hidden; }
+.btn-cell .btn { width: 100%; min-height: 34px; }
+.btn.act-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-text); }
+.btn.act-ok { background: #059669; border-color: #059669; color: #fff; }
+.btn.act-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.act-warn { background: #d97706; border-color: #d97706; color: #fff; }
+.btn.act-neutral { background: var(--surface-2); color: var(--text); }
+.btn.act:not(:disabled):hover { filter: brightness(1.08); }
+.dz-btn { background: var(--surface-2); }
+.dz-btn .btn.act { width: 100%; pointer-events: none; min-height: 34px; }
+.dz-btn-desc { font-size: .72rem; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dz-btn .dz-tools { opacity: 1; }

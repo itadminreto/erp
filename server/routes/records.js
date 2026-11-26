@@ -417,6 +417,35 @@ router.get('/:appKey/records/:id/files/:fid', wrap(async (req, res) => {
   res.send(Buffer.from(f.data, 'base64'));
 }));
 
+// ---------- botones de acción: enviar por correo ----------
+/** Sustituye {campo} por su valor legible (las contraseñas nunca se incluyen). */
+async function renderTemplate(req, rec, tpl) {
+  const data = JSON.parse(rec.data || '{}');
+  const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
+  const vars = { numero: rec.number, app: req.appDef.name, centro: rec.center_name || '', fecha: String(rec.created_at).slice(0, 10), usuario: req.user.name };
+  for (const f of req.fields) if (f.type !== 'password') vars[f.key] = toText(f, data[f.key], users);
+  return String(tpl || '').replace(/\{([a-z0-9_]+)\}/g, (m, k) => (k in vars ? String(vars[k] ?? '') : m));
+}
+router.post('/:appKey/records/:id/action/:bid', wrap(async (req, res) => {
+  const rec = await getRecord(req, req.params.id);
+  let layout = {};
+  try { layout = req.appDef.form_layout ? JSON.parse(req.appDef.form_layout) : {}; } catch { layout = {}; }
+  const item = (layout.items || []).find((x) => x && x.button && x.button.id === req.params.bid);
+  if (!item || item.button.action !== 'email') throw httpError(404, 'Acción no encontrada');
+  const b = item.button;
+  const data = JSON.parse(rec.data || '{}');
+  const to = [b.to_field ? data[b.to_field] : '', b.to_fixed].filter(Boolean).join(', ');
+  if (!to) throw httpError(400, 'El registro no tiene email de destino');
+  const subject = await renderTemplate(req, rec, b.subject);
+  const body = (await renderTemplate(req, rec, b.body))
+    || req.fields.filter((f) => !['password', 'signature', 'image'].includes(f.type))
+      .map((f) => `${f.label}: ${toText(f, data[f.key], {}) || '—'}`).join('\n');
+  await sendMail({ to, subject, text: body });
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'email', appId: req.appDef.id, companyId: req.companyId,
+    summary: `Correo «${b.label}» enviado a ${to}` });
+  res.json({ ok: true, to });
+}));
+
 // ---------- historial ----------
 router.get('/:appKey/records/:id/history', wrap(async (req, res) => {
   const rec = await getRecord(req, req.params.id);

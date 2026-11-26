@@ -496,8 +496,10 @@ export async function renderFormDesigner(root, appId) {
   try { layout = app.form_layout ? JSON.parse(app.form_layout) : {}; } catch { layout = {}; }
   // grupos iniciales: el primero sin título; los campos no colocados van al final
   const groups = [{ title: null, keys: [] }]; const seen = new Set();
+  const btns = {}; // 'btn:id' → configuración del botón de acción
   for (const it of Array.isArray(layout.items) ? layout.items : []) {
-    if (it && typeof it === 'object' && 'section' in it) groups.push({ title: it.section, keys: [] });
+    if (it && typeof it === 'object' && it.button) { btns['btn:' + it.button.id] = { ...it.button }; groups[groups.length - 1].keys.push('btn:' + it.button.id); }
+    else if (it && typeof it === 'object' && 'section' in it) groups.push({ title: it.section, keys: [] });
     else if (byKey[it] && !seen.has(it)) { groups[groups.length - 1].keys.push(it); seen.add(it); }
   }
   groups[groups.length - 1].keys.push(...fields.map((f) => f.key).filter((k) => !seen.has(k)));
@@ -513,6 +515,7 @@ export async function renderFormDesigner(root, appId) {
   // Tiradores: borde derecho = ancho; borde inferior = alto (filas); esquina = ancho y alto a la vez.
   // El alto solo se ofrece en texto largo y selección múltiple (en un campo de una línea solo dejaría un hueco).
   function fieldCard(k) {
+    if (k.startsWith('btn:')) return buttonCard(k);
     const f = byKey[k];
     const tall = DZ_TALL.includes(f.type);
     const card = h('div.field.dz-field', { dataset: { key: k } });
@@ -570,6 +573,113 @@ export async function renderFormDesigner(root, appId) {
     return card;
   }
 
+  // ----- botones de acción -----
+  const ACTIONS = {
+    set_fields: 'Rellenar campos (y guardar)', open_url: 'Abrir enlace (mapa, llamar, WhatsApp, web…)', email: 'Enviar por correo', print: 'Imprimir parte', duplicate: 'Duplicar registro',
+  };
+  const COLORS = { primary: 'Principal', ok: 'Verde', warn: 'Naranja', danger: 'Rojo', neutral: 'Gris' };
+  const describe = (b) => {
+    if (b.action === 'set_fields') return `Rellena ${(b.sets || []).map((x) => (byKey[x.field] || {}).label + ' = ' + (x.value || 'vacío')).join(', ')}${b.save ? ' y guarda' : ''}`;
+    if (b.action === 'open_url') return `Abre ${b.url}`;
+    if (b.action === 'email') return `Envía correo a ${[b.to_field ? `{${b.to_field}}` : '', b.to_fixed].filter(Boolean).join(', ')}`;
+    return ACTIONS[b.action];
+  };
+  function buttonCard(k) {
+    const b = btns[k];
+    const card = h('div.field.dz-field.dz-btn', { dataset: { key: k } });
+    const sizeLbl = h('span.dz-size');
+    const draw = () => {
+      card.className = `field dz-field dz-btn w-${b.width || 'sm'}`;
+      sizeLbl.textContent = DZ_WIDTHS.find((w) => w[0] === (b.width || 'sm'))[1];
+      clear(card,
+        h('label', h('span.dz-grip', '⋮⋮'), 'Botón', b.condition ? h('span.chip', { style: { marginLeft: '6px', fontSize: '.68rem' } }, 'con condición') : null),
+        h('div.btn.act', { class: 'act-' + b.color }, b.icon ? h('span', b.icon) : null, b.label),
+        h('div.dz-btn-desc', describe(b)),
+        h('div.dz-tools',
+          h('button', { type: 'button', title: 'Más estrecho', onclick: () => step(-1) }, '−'), sizeLbl, h('button', { type: 'button', title: 'Más ancho', onclick: () => step(1) }, '+'),
+          h('button', { type: 'button', title: 'Configurar', style: { width: 'auto', padding: '0 6px' }, onclick: async () => { if (await editButton(b)) { draw(); setDirty(); } } }, '⚙'),
+          h('button', { type: 'button', title: 'Quitar botón', onclick: () => { card.remove(); delete btns[k]; setDirty(); } }, '✕')));
+    };
+    const step = (d) => { const i = DZ_WIDTHS.findIndex((w) => w[0] === (b.width || 'sm')); const n = Math.min(Math.max(i + d, 0), DZ_WIDTHS.length - 1); if (n !== i) { b.width = DZ_WIDTHS[n][0]; draw(); setDirty(); } };
+    card.addEventListener('dblclick', async () => { if (await editButton(b)) { draw(); setDirty(); } });
+    draw();
+    return card;
+  }
+
+  /** Ventana de configuración de un botón. Modifica `b` y devuelve true si se acepta. */
+  function editButton(b) {
+    return new Promise((resolve) => {
+      let accepted = false;
+      const fieldOpts = (filter = () => true, empty = '— Elegir campo —') => [h('option', { value: '' }, empty), ...fields.filter(filter).map((f) => h('option', { value: f.key }, f.label))];
+      const label = h('input', { value: b.label, maxlength: 40 });
+      const icon = h('input', { value: b.icon || '', maxlength: 8, placeholder: '✔ 📍 📞 ✉️ 🖨' });
+      const color = h('select', Object.entries(COLORS).map(([k, l]) => h('option', { value: k, selected: b.color === k }, l)));
+      const action = h('select', Object.entries(ACTIONS).map(([k, l]) => h('option', { value: k, selected: b.action === k }, l)));
+      const confirmTxt = h('input', { value: b.confirm || '', placeholder: 'Opcional: p. ej. ¿Marcar el trabajo {numero} como hecho?' });
+      // rellenar campos
+      const setsBox = h('div.stack', { style: { gap: '6px' } });
+      const addSet = (st = {}) => {
+        const fsel = h('select', fieldOpts((f) => !['password', 'signature', 'image'].includes(f.type)));
+        fsel.value = st.field || '';
+        const val = h('input', { value: st.value || '', placeholder: 'Valor, {hoy}, {ahora}, {usuario} o {vacio}' });
+        const row = h('div.row', { style: { flexWrap: 'nowrap' } }, fsel, val, h('button.btn.icon.ghost', { type: 'button', onclick: () => row.remove() }, '✕'));
+        row.get = () => ({ field: fsel.value, value: val.value });
+        setsBox.append(row);
+      };
+      (b.sets && b.sets.length ? b.sets : [{}]).forEach(addSet);
+      const save = h('input', { type: 'checkbox', checked: b.save !== false });
+      // enlace
+      const url = h('input', { value: b.url || '', placeholder: 'https://www.google.com/maps/search/?api=1&query={direccion}' });
+      const presets = h('div.row', { style: { gap: '4px' } }, h('span.small.muted', 'Plantillas:'),
+        [['📍 Mapa', 'https://www.google.com/maps/search/?api=1&query={campo}'], ['📞 Llamar', 'tel:{campo}'], ['💬 WhatsApp', 'https://wa.me/34{campo}'], ['✉️ Email', 'mailto:{campo}']]
+          .map(([l, u]) => h('button.btn.sm', { type: 'button', onclick: () => { url.value = u; url.focus(); } }, l)));
+      // correo
+      const toField = h('select', fieldOpts((f) => f.type === 'email', '— Ninguno —')); toField.value = b.to_field || '';
+      const toFixed = h('input', { value: b.to_fixed || '', placeholder: 'jefe@empresa.com, oficina@empresa.com' });
+      const subject = h('input', { value: b.subject || '{app} Nº {numero}' });
+      const body = h('textarea', { value: b.body || '', placeholder: 'Vacío = se envían todos los datos del registro.\nEj.: Hola, el trabajo {numero} ({titulo}) está terminado.' });
+      // condición
+      const cField = h('select', fieldOpts(() => true, '— Mostrar siempre —')); cField.value = b.condition ? b.condition.field : '';
+      const cOp = h('select', [['eq', 'es igual a'], ['ne', 'es distinto de'], ['empty', 'está vacío'], ['filled', 'tiene valor']].map(([k, l]) => h('option', { value: k, selected: b.condition && b.condition.op === k }, l)));
+      const cVal = h('input', { value: b.condition ? b.condition.value : '', placeholder: 'valor' });
+      const vars = h('p.help', 'En textos y enlaces puedes usar {clave_del_campo} y también {numero}, {app}, {usuario}. Claves: ',
+        fields.filter((f) => !['password', 'signature', 'image'].includes(f.type)).map((f) => f.key).join(', '));
+      const blocks = {
+        set_fields: h('div.stack', h('label.small.muted', 'Campos que rellena'), setsBox, h('div', h('button.btn.sm', { type: 'button', onclick: () => addSet() }, '＋ Otro campo')), h('label.check', save, 'Guardar el registro después')),
+        open_url: h('div.stack', h('div.field', h('label', 'Enlace'), url), presets),
+        email: h('div.stack', h('div.two-col', h('div.field', h('label', 'Enviar al email del campo'), toField), h('div.field', h('label', 'y/o a estas direcciones'), toFixed)),
+          h('div.field', h('label', 'Asunto'), subject), h('div.field', h('label', 'Texto'), body), h('p.help', 'Necesita el correo saliente (SMTP) configurado en Ajustes.')),
+        print: h('p.muted', 'Imprime el parte del registro (debe estar guardado).'),
+        duplicate: h('p.muted', 'Abre un registro nuevo con los mismos datos (sin fotos, firmas ni contraseñas).'),
+      };
+      const actionBox = h('div');
+      const sync = () => { clear(actionBox, blocks[action.value]); cOpSync(); };
+      const cOpSync = () => { cVal.hidden = ['empty', 'filled'].includes(cOp.value) || !cField.value; cOp.hidden = !cField.value; };
+      action.onchange = sync; cOp.onchange = cOpSync; cField.onchange = cOpSync; sync();
+      const m = modal({
+        title: '⚙ Botón de acción', size: '',
+        content: h('div.stack',
+          h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '12px' } },
+            h('div.field', h('label', 'Texto del botón'), label), h('div.field', h('label', 'Icono'), icon), h('div.field', h('label', 'Color'), color)),
+          h('div.field', h('label', 'Qué hace'), action), actionBox,
+          h('div.field', h('label', 'Mostrar solo si…'), h('div.row', { style: { flexWrap: 'nowrap' } }, cField, cOp, cVal)),
+          h('div.field', h('label', 'Pedir confirmación'), confirmTxt), vars),
+        footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: () => {
+          if (!label.value.trim()) return toast('Escribe el texto del botón', 'error');
+          const sets = [...setsBox.children].map((r) => r.get()).filter((x) => x.field);
+          if (action.value === 'set_fields' && !sets.length) return toast('Elige al menos un campo a rellenar', 'error');
+          if (action.value === 'open_url' && !/^(https?:\/\/|tel:|mailto:|sms:)/i.test(url.value.trim())) return toast('El enlace debe empezar por https://, tel:, mailto: o sms:', 'error');
+          if (action.value === 'email' && !toField.value && !toFixed.value.trim()) return toast('Indica a quién se envía', 'error');
+          Object.assign(b, { label: label.value.trim(), icon: icon.value.trim(), color: color.value, action: action.value, confirm: confirmTxt.value.trim(),
+            sets, save: save.checked, url: url.value.trim(), to_field: toField.value, to_fixed: toFixed.value.trim(), subject: subject.value, body: body.value,
+            condition: cField.value ? { field: cField.value, op: cOp.value, value: cVal.value } : undefined });
+          accepted = true; m.close();
+        } }, 'Aceptar')],
+        onClose: () => resolve(accepted),
+      });
+    });
+  }
+
   // ----- secciones -----
   const mkGrid = (keys) => {
     const g = h('div.form-grid.dz-grid', keys.map(fieldCard));
@@ -620,10 +730,11 @@ export async function renderFormDesigner(root, appId) {
   const saveBtn = h('button.btn.primary', { disabled: true, onclick: save }, '💾 Guardar diseño');
 
   async function save() {
-    const items = [...[...topGrid.children].map((c) => c.dataset.key)];
+    const item = (c) => (c.dataset.key.startsWith('btn:') ? { button: btns[c.dataset.key] } : c.dataset.key);
+    const items = [...topGrid.children].map(item);
     for (const sec of sectionsBox.children) {
       items.push({ section: sec.querySelector('.dz-title').value.trim() || 'Sección' });
-      items.push(...[...sec.querySelector('.dz-grid').children].map((c) => c.dataset.key));
+      items.push(...[...sec.querySelector('.dz-grid').children].map(item));
     }
     try {
       await api(`/admin/apps/${app.id}/design`, { method: 'PUT', body: { items, widths, heights, tabs: tabsCb.checked, label_size: sizes.label, input_size: sizes.input } });
@@ -636,6 +747,13 @@ export async function renderFormDesigner(root, appId) {
     head(`🎨 Diseño del formulario · ${app.name}`, 'Arrastra los campos para colocarlos; tira del borde derecho (ancho), del inferior (alto) o de la esquina (ambos) para cambiar su tamaño, y agrupa con secciones.',
       h('a.btn', { href: '#/admin/apps' }, '← Volver'), saveBtn),
     h('div.toolbar',
+      h('button.btn', { onclick: async () => {
+        const b = { id: Math.random().toString(36).slice(2, 10), label: 'Nuevo botón', icon: '', color: 'primary', width: 'sm', action: 'print' };
+        if (!(await editButton(b))) return;
+        btns['btn:' + b.id] = b;
+        const card = buttonCard('btn:' + b.id); topGrid.append(card); setDirty();
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } }, '＋ Añadir botón'),
       h('button.btn', { onclick: () => { const s = sectionEl('Nueva sección', []); sectionsBox.append(s); s.querySelector('.dz-title').select(); setDirty(); s.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }, '＋ Añadir sección'),
       h('label.check', tabsCb, 'Mostrar las secciones como pestañas'),
       fsCtl('label', lblVal, 'Etiquetas'), fsCtl('input', inpVal, 'Campos'),

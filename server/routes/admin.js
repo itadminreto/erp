@@ -355,9 +355,15 @@ router.put('/apps/:id/design', wrap(async (req, res) => {
   const { items = [], widths = {}, heights = {}, tabs = false, label_size = null, input_size = null } = req.body || {};
   const px = (v, min, max) => (v === null || v === '' || v === undefined ? null : Math.min(Math.max(Math.round(Number(v)) || min, min), max));
   if (!Array.isArray(items) || items.length > 500) throw httpError(400, 'Diseño no válido');
-  const clean = []; const seen = new Set(); let sections = 0;
+  const clean = []; const seen = new Set(); let sections = 0; let buttons = 0; const btnIds = new Set();
   for (const it of items) {
-    if (it && typeof it === 'object' && 'section' in it) {
+    if (it && typeof it === 'object' && it.button) {
+      if (++buttons > 30) throw httpError(400, 'Demasiados botones (máx. 30)');
+      const b = cleanButton(it.button, byKey);
+      if (btnIds.has(b.id)) b.id = Math.random().toString(36).slice(2, 10);
+      btnIds.add(b.id);
+      clean.push({ button: b });
+    } else if (it && typeof it === 'object' && 'section' in it) {
       const title = String(it.section || '').trim().slice(0, 80) || 'Sección';
       if (++sections > 50) throw httpError(400, 'Demasiadas secciones (máx. 50)');
       clean.push({ section: title });
@@ -374,9 +380,52 @@ router.put('/apps/:id/design', wrap(async (req, res) => {
     await run('UPDATE apps SET form_layout = ? WHERE id = ?', JSON.stringify({ tabs: bool(tabs) === 1, items: clean, label_size: px(label_size, 10, 22), input_size: px(input_size, 11, 24) }), app.id);
   });
   await audit(req, { entity: 'apps', entityId: app.id, appId: app.id, action: 'update',
-    summary: `Diseño del formulario de ${app.name}: ${sections} sección/es${bool(tabs) ? ', en pestañas' : ''}` });
+    summary: `Diseño del formulario de ${app.name}: ${sections} sección/es, ${buttons} botón/es${bool(tabs) ? ', en pestañas' : ''}` });
   res.json({ ok: true });
 }));
+
+/**
+ * Valida la configuración de un botón de acción del diseñador (sin código: acciones predefinidas).
+ * Acciones: set_fields (rellenar campos y, opcionalmente, guardar), open_url (enlace con {campo}),
+ * email (enviar resumen por correo), print (imprimir ficha), duplicate (copiar a un registro nuevo).
+ */
+const BUTTON_ACTIONS = ['set_fields', 'open_url', 'email', 'print', 'duplicate'];
+const BUTTON_COLORS = ['primary', 'ok', 'danger', 'warn', 'neutral'];
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+function cleanButton(b, byKey) {
+  const str = (v, n) => String(v ?? '').trim().slice(0, n);
+  const out = {
+    id: /^[a-z0-9]{4,16}$/.test(String(b.id || '')) ? b.id : Math.random().toString(36).slice(2, 10),
+    label: str(b.label, 40) || 'Botón', icon: str(b.icon, 8),
+    color: BUTTON_COLORS.includes(b.color) ? b.color : 'primary',
+    width: WIDTHS.includes(b.width) ? b.width : 'sm',
+    action: BUTTON_ACTIONS.includes(b.action) ? b.action : 'print',
+    confirm: str(b.confirm, 200),
+  };
+  if (b.condition && byKey[b.condition.field] && ['eq', 'ne', 'empty', 'filled'].includes(b.condition.op)) {
+    out.condition = { field: b.condition.field, op: b.condition.op, value: str(b.condition.value, 200) };
+  }
+  if (out.action === 'set_fields') {
+    out.sets = (Array.isArray(b.sets) ? b.sets : []).slice(0, 20)
+      .filter((s) => byKey[s.field] && !['password', 'signature', 'image'].includes(byKey[s.field].type))
+      .map((s) => ({ field: s.field, value: str(s.value, 200) }));
+    if (!out.sets.length) throw httpError(400, `Botón «${out.label}»: indica al menos un campo a rellenar`);
+    out.save = !!b.save;
+  }
+  if (out.action === 'open_url') {
+    out.url = str(b.url, 500);
+    if (!/^(https?:\/\/|tel:|mailto:|sms:)/i.test(out.url)) throw httpError(400, `Botón «${out.label}»: el enlace debe empezar por https://, tel:, mailto: o sms:`);
+  }
+  if (out.action === 'email') {
+    out.to_field = byKey[b.to_field] && byKey[b.to_field].type === 'email' ? b.to_field : '';
+    out.to_fixed = str(b.to_fixed, 300).split(/[,;\s]+/).filter(Boolean).join(', ');
+    if (out.to_fixed && !out.to_fixed.split(', ').every((e) => EMAIL_RE.test(e))) throw httpError(400, `Botón «${out.label}»: hay un email fijo no válido`);
+    if (!out.to_field && !out.to_fixed) throw httpError(400, `Botón «${out.label}»: indica a quién se envía el correo`);
+    out.subject = str(b.subject, 200) || '{app} Nº {numero}';
+    out.body = String(b.body ?? '').slice(0, 4000);
+  }
+  return out;
+}
 
 router.put('/apps-order', wrap(async (req, res) => {
   await tx(async () => { for (const [i, id] of (req.body.ids || []).entries()) await run('UPDATE apps SET sort = ? WHERE id = ?', i, Number(id)); });

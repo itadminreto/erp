@@ -159,7 +159,7 @@ export async function renderApp(root, key, onCountsChanged) {
     let html = '';
     const groups = formGroups().groups;
     groups.forEach((g, gi) => {
-      const keys = g.keys.filter((k) => fieldsByKey[k].type !== 'signature' && !(k === meta.app.title_field && rec.data[k])); // el título ya va en la cabecera
+      const keys = g.keys.filter((k) => fieldsByKey[k] && fieldsByKey[k].type !== 'signature' && !(k === meta.app.title_field && rec.data[k])); // el título ya va en la cabecera
       if (!keys.length && !(gi === 0)) return;
       let inner = gi === 0 && meta.centers.length
         ? box('Centro', rec.center_name ? `${rec.center_code ? rec.center_code + ' · ' : ''}${rec.center_name}` : '', 4) : '';
@@ -448,20 +448,29 @@ export async function renderApp(root, key, onCountsChanged) {
    * Grupos de campos según el diseño de la app (super admin). El primer grupo no tiene título (campos antes de
    * cualquier sección). Dentro de cada sección se aplica el orden personal del usuario («Mover campos»).
    */
+  const buttonsById = {}; // botones de acción del diseño ('btn:id' → configuración)
   function formGroups() {
     let layout = {};
     try { layout = meta.app.form_layout ? JSON.parse(meta.app.form_layout) : {}; } catch { layout = {}; }
     const groups = [{ title: null, keys: [] }];
     const seen = new Set();
+    for (const k of Object.keys(buttonsById)) delete buttonsById[k];
     for (const it of Array.isArray(layout.items) ? layout.items : []) {
-      if (it && typeof it === 'object' && 'section' in it) groups.push({ title: String(it.section || 'Sección'), keys: [] });
+      if (it && typeof it === 'object' && it.button) { const k = 'btn:' + it.button.id; buttonsById[k] = it.button; groups[groups.length - 1].keys.push(k); }
+      else if (it && typeof it === 'object' && 'section' in it) groups.push({ title: String(it.section || 'Sección'), keys: [] });
       else if (typeof it === 'string' && fieldsByKey[it] && !seen.has(it)) { groups[groups.length - 1].keys.push(it); seen.add(it); }
     }
     groups[groups.length - 1].keys.push(...meta.fields.map((f) => f.key).filter((k) => !seen.has(k))); // campos nuevos, al final
     const uo = meta.layouts.form && meta.layouts.form.order;
     if (Array.isArray(uo)) {
       const idx = Object.fromEntries(uo.map((k, i) => [k, i]));
-      for (const g of groups) g.keys = g.keys.map((k, i) => [k, idx[k] ?? 1e6 + i]).sort((a, b) => a[1] - b[1]).map((x) => x[0]);
+      for (const g of groups) {
+        // el orden personal solo mueve campos; los botones conservan su posición del diseño
+        const btnPos = g.keys.map((k, i) => [k, i]).filter(([k]) => k.startsWith('btn:'));
+        const fieldsOnly = g.keys.filter((k) => !k.startsWith('btn:')).map((k, i) => [k, idx[k] ?? 1e6 + i]).sort((a, b) => a[1] - b[1]).map((x) => x[0]);
+        for (const [k, i] of btnPos) fieldsOnly.splice(Math.min(i, fieldsOnly.length), 0, k);
+        g.keys = fieldsOnly;
+      }
     }
     return { groups: groups.filter((g) => g.keys.length), tabs: !!layout.tabs, labelSize: layout.label_size, inputSize: layout.input_size };
   }
@@ -480,6 +489,89 @@ export async function renderApp(root, key, onCountsChanged) {
 
     const fieldEls = {};
     for (const f of meta.fields) fieldEls[f.key] = buildField(f);
+    let saveRef = null; // botón Guardar (lo usan los botones de acción «rellenar y guardar»)
+    formGroups(); // carga los botones del diseño en buttonsById
+    for (const [bk, b] of Object.entries(buttonsById)) fieldEls[bk] = buildActionButton(b);
+
+    // ----- botones de acción configurados en el diseñador -----
+    function valueOf(k, readable = false) {
+      const f = fieldsByKey[k]; const i = inputs[k];
+      if (!f || !i) return '';
+      if (f.type === 'checkbox') return i.checked ? (readable ? 'Sí' : '1') : '';
+      if (f.type === 'multiselect') return [...i.selectedOptions].map((o) => o.value).join(', ');
+      if (f.type === 'image') { const n = i.value.length; return n ? String(n) : ''; }
+      if (f.type === 'user' && readable) return usersById[i.value] ? usersById[i.value].name : '';
+      return i.value ?? '';
+    }
+    const today = () => new Date().toISOString().slice(0, 10);
+    function token(v, f) {
+      const t = String(v ?? '').trim();
+      if (t === '{hoy}') return f && f.type === 'datetime' ? `${today()}T${new Date().toTimeString().slice(0, 5)}` : today();
+      if (t === '{ahora}') return f && f.type === 'date' ? today() : `${today()}T${new Date().toTimeString().slice(0, 5)}`;
+      if (t === '{usuario}') return f && f.type === 'user' ? String(state.me.id) : state.me.name;
+      if (t === '{vacio}') return '';
+      return t;
+    }
+    function setValue(f, raw) {
+      const i = inputs[f.key]; if (!i) return;
+      const v = token(raw, f);
+      if (f.type === 'checkbox') i.checked = ['1', 'si', 'sí', 'true', 'x'].includes(v.toLowerCase());
+      else if (f.type === 'multiselect') { const want = v.split(/[,;]/).map((x) => x.trim().toLowerCase()); [...i.options].forEach((o) => { o.selected = want.includes(o.value.toLowerCase()); }); }
+      else if (f.type === 'select') { const o = [...i.options].find((x) => x.value.toLowerCase() === v.toLowerCase()); i.value = o ? o.value : ''; }
+      else if (f.type === 'user') { const u = meta.users.find((x) => String(x.id) === v || x.name.toLowerCase() === v.toLowerCase() || x.email.toLowerCase() === v.toLowerCase()); i.value = u ? u.id : ''; }
+      else i.value = v;
+      i.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    function conditionOk(b) {
+      const c = b.condition; if (!c) return true;
+      const val = String(valueOf(c.field)).trim().toLowerCase();
+      const want = String(token(c.value, fieldsByKey[c.field])).trim().toLowerCase();
+      return c.op === 'eq' ? val === want : c.op === 'ne' ? val !== want : c.op === 'empty' ? !val : !!val;
+    }
+    function fillTemplate(tpl, encode) {
+      const vars = { numero: rec ? rec.number : '', app: meta.app.name, usuario: state.me.name };
+      return String(tpl).replace(/\{([a-z0-9_]+)\}/g, (m, k) => {
+        const v = k in vars ? vars[k] : fieldsByKey[k] ? valueOf(k, true) : m;
+        return encode ? encodeURIComponent(v) : v;
+      });
+    }
+    function buildActionButton(b) {
+      const allowed = { set_fields: editable, open_url: true, email: !!rec, print: !!rec, duplicate: P.create }[b.action];
+      const btn = h('button.btn.act', { type: 'button', class: 'act-' + (b.color || 'primary'), disabled: !allowed,
+        title: !allowed ? (b.action === 'set_fields' ? 'Sin permiso de edición' : 'Guarda el registro primero') : '' },
+      b.icon ? h('span', b.icon) : null, b.label);
+      btn.addEventListener('click', async () => {
+        if (b.confirm && !(await confirmDlg(fillTemplate(b.confirm), { ok: b.label, title: b.label }))) return;
+        try {
+          if (b.action === 'set_fields') {
+            for (const st of b.sets || []) if (fieldsByKey[st.field]) setValue(fieldsByKey[st.field], st.value);
+            evalButtons();
+            if (b.save && saveRef) saveRef.click(); else toast('Campos actualizados: pulsa Guardar para confirmar', 'ok');
+          } else if (b.action === 'open_url') {
+            const url = fillTemplate(b.url, true);
+            if (!/^(https?:\/\/|tel:|mailto:|sms:)/i.test(url)) return toast('Enlace no válido', 'error');
+            if (/^https?:/i.test(url)) window.open(url, '_blank', 'noopener'); else location.href = url;
+          } else if (b.action === 'email') {
+            const r = await api(`/apps/${key}/records/${rec.id}/action/${b.id}`, { method: 'POST' });
+            toast(`Correo enviado a ${r.to}`, 'ok');
+          } else if (b.action === 'print') {
+            printRecord(rec);
+          } else if (b.action === 'duplicate') {
+            const pre = {};
+            for (const f of meta.fields) {
+              if (['password', 'signature', 'image'].includes(f.type)) continue;
+              const i = inputs[f.key]; if (!i) continue;
+              pre[f.key] = f.type === 'checkbox' ? i.checked : f.type === 'multiselect' ? [...i.selectedOptions].map((o) => o.value) : i.value;
+            }
+            m.close(); openRecord(null, pre);
+          }
+        } catch (e) { toastErr(e); }
+      });
+      return h('div.field.btn-cell', { class: 'w-' + (b.width || 'sm'), dataset: { key: 'btn:' + b.id, cond: b.condition ? '1' : '' } }, h('label', '\u00a0'), btn);
+    }
+    function evalButtons() {
+      for (const [bk, b] of Object.entries(buttonsById)) fieldEls[bk].hidden = !conditionOk(b);
+    }
     // una rejilla por sección; en modo pestañas, una pestaña por sección con título
     const { groups, tabs: asTabs, labelSize, inputSize } = formGroups();
     const grids = groups.map(() => h('div.form-grid'));
@@ -692,13 +784,16 @@ export async function renderApp(root, key, onCountsChanged) {
           m.close(); load(); onCountsChanged && onCountsChanged();
         } catch (e) {
           toastErr(e); saveBtn.disabled = false;
-          const bad = groups.findIndex((g) => g.keys.some((k) => e.message.includes(fieldsByKey[k].label + ':')));
+          const bad = groups.findIndex((g) => g.keys.some((k) => fieldsByKey[k] && e.message.includes(fieldsByKey[k].label + ':')));
           if (bad >= 0) showSection(bad);
         }
       } }, isNew ? 'Crear' : 'Guardar');
       footer.push(saveBtn);
     }
     m.foot.hidden = false; footer.forEach((b) => m.foot.append(b));
+    saveRef = m.foot.querySelector('.btn.primary');
+    evalButtons();
+    dataPane.addEventListener('input', evalButtons); dataPane.addEventListener('change', evalButtons);
   }
 
   async function loadHistory(rec, pane) {

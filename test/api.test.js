@@ -454,3 +454,32 @@ test('campo Imagen: varias fotos, se sirven con permisos, se quitan y se borran 
   const { get } = db; assert.equal((await get('SELECT COUNT(*) n FROM record_files WHERE record_id = ?', r.body.id)).n, 0);
   await admin.call('PUT', `/admin/fields/${fld.id}`, { active: false });
 });
+
+test('botones de acción en el diseño: validación y acción de correo', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const rec = apps.find((a) => a.key === 'recados');
+  const items = rec.fields.map((f) => f.key);
+  const ok = await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items: [
+    { button: { id: 'hecho01', label: '✔ Marcar hecho', action: 'set_fields', color: 'ok', sets: [{ field: 'estado', value: 'Hecho' }, { field: 'fecha_realizado', value: '{hoy}' }, { field: 'no_existe', value: 'x' }], save: true,
+      condition: { field: 'estado', op: 'ne', value: 'Hecho' } } },
+    { button: { id: 'mapa01', label: 'Mapa', action: 'open_url', url: 'https://maps.google.com/?q={titulo}' } },
+    { button: { id: 'mail01', label: 'Enviar', action: 'email', to_fixed: 'jefe@empresa.com', subject: 'Parte {numero}', body: 'Trabajo {titulo} en {centro}' } },
+    ...items] });
+  assert.equal(ok.status, 200);
+  const layout = JSON.parse((await admin.call('GET', '/apps/recados')).body.app.form_layout);
+  const btns = layout.items.filter((x) => x.button).map((x) => x.button);
+  assert.deepEqual(btns.map((b) => b.id), ['hecho01', 'mapa01', 'mail01']);
+  assert.deepEqual(btns[0].sets.map((s) => s.field), ['estado', 'fecha_realizado'], 'descarta campos inexistentes');
+  // enlaces peligrosos y botones mal configurados se rechazan
+  const bad = (button) => admin.call('PUT', `/admin/apps/${rec.id}/design`, { items: [{ button }, ...items] });
+  assert.equal((await bad({ label: 'X', action: 'open_url', url: 'javascript:alert(1)' })).status, 400);
+  assert.equal((await bad({ label: 'X', action: 'email', to_fixed: 'no-es-email' })).status, 400);
+  assert.equal((await bad({ label: 'X', action: 'set_fields', sets: [] })).status, 400);
+  // acción de correo: sin SMTP configurado avisa; un botón que no es de correo no envía nada
+  const r = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Con botón' } });
+  const mail = await admin.call('POST', `/apps/recados/records/${r.body.id}/action/mail01`);
+  assert.equal(mail.status, 400); assert.match(mail.body.error, /SMTP/);
+  assert.equal((await admin.call('POST', `/apps/recados/records/${r.body.id}/action/mapa01`)).status, 404);
+  // vuelve a dejar el diseño sin botones para el resto de pruebas
+  await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items });
+});

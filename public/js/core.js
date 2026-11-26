@@ -165,7 +165,7 @@ export const PERM_LABELS = {
 export const ACTION_LABELS = {
   create: ['Alta', 'ok'], update: ['Modificación', ''], delete: ['Papelera', 'danger'], restore: ['Restaurado', 'ok'], purge: ['Borrado definitivo', 'danger'],
   reveal: ['Contraseña vista', 'warn'], share: ['Contraseña enviada', 'warn'], share_open: ['Enlace abierto', 'warn'], export: ['Exportación', ''], import: ['Importación', ''],
-  backup: ['Copia de seguridad', 'ok'], login: ['Acceso', ''], login_failed: ['Acceso fallido', 'danger'], password: ['Cambio contraseña', 'warn'],
+  backup: ['Copia de seguridad', 'ok'], email: ['Correo enviado', 'warn'], login: ['Acceso', ''], login_failed: ['Acceso fallido', 'danger'], password: ['Cambio contraseña', 'warn'],
 };
 
 /**
