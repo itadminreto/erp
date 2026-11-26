@@ -2,7 +2,7 @@
 const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
-const { all, get, run, tx, sqlDate } = require('../db');
+const { all, get, run, tx, sqlDate, nextNumber } = require('../db');
 const { grantsFor, can, summary, sqlFilter } = require('../auth');
 const { appFields, normalize, toText } = require('../fields');
 const { encrypt, decrypt, shortCode } = require('../crypto');
@@ -55,16 +55,18 @@ async function getRecord(req, id) {
   return r;
 }
 
-function serialize(req, r) {
+function serialize(req, r, full = true) {
   const data = JSON.parse(r.data || '{}');
   const out = {};
   for (const f of req.fields) {
     const v = data[f.key];
-    out[f.key] = f.type === 'password' ? (v ? MASK : '') : (v ?? '');
+    if (f.type === 'password') out[f.key] = v ? MASK : '';
+    else if (f.type === 'signature') out[f.key] = v && v.img ? (full ? v : { signed: true, at: v.at }) : '';
+    else out[f.key] = v ?? '';
   }
   const g = req.grants, u = req.user;
   return {
-    id: r.id, center_id: r.center_id, center_name: r.center_name, center_code: r.center_code,
+    id: r.id, number: r.number, center_id: r.center_id, center_name: r.center_name, center_code: r.center_code,
     data: out,
     created_at: r.created_at, updated_at: r.updated_at, created_by_name: r.created_by_name, updated_by_name: r.updated_by_name,
     deleted_at: r.deleted_at, deleted_by_name: r.deleted_by_name,
@@ -93,6 +95,12 @@ function buildData(req, input, existing, ctx) {
       data[f.key] = v ? encrypt(String(v)) : '';
       continue;
     }
+    if (f.type === 'signature') {
+      const img = v && typeof v === 'object' ? v.img : v;
+      if (img && existing && existing[f.key] && existing[f.key].img === img) continue; // misma firma
+      try { data[f.key] = normalize(f, img ? { img } : '', ctx); } catch (e) { errors.push(e.message); }
+      continue;
+    }
     try { data[f.key] = normalize(f, v, ctx); } catch (e) { errors.push(e.message); }
   }
   for (const f of req.fields) {
@@ -108,10 +116,10 @@ async function checkUnique(req, data, exceptId = 0) {
     const v = data[f.key];
     if (v === '' || v === undefined || v === null) continue;
     const dup = await get(
-      `SELECT id FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND id <> ?
+      `SELECT id, number FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND id <> ?
        AND LOWER(${jv(f.key, '')}) = LOWER(?) LIMIT 1`,
       req.appDef.id, req.companyId, exceptId, String(v));
-    if (dup) throw httpError(409, `${f.label}: ya existe un registro con "${v}" (#${dup.id})`);
+    if (dup) throw httpError(409, `${f.label}: ya existe un registro con "${v}" (Nº ${dup.number})`);
   }
 }
 
@@ -135,6 +143,12 @@ function fail(res, e) {
   res.status(e.status || 500).json(body);
 }
 const pwKeysOf = (req) => req.fields.filter((f) => f.type === 'password').map((f) => f.key);
+/** Vista de los datos para la auditoría: las firmas se registran como «Firmado (fecha)», no la imagen. */
+const auditView = (req, data) => {
+  const out = { ...data };
+  for (const f of req.fields) if (f.type === 'signature') out[f.key] = data[f.key] && data[f.key].img ? `Firmado (${data[f.key].at})` : '';
+  return out;
+};
 
 // ---------- catálogo de apps ----------
 router.get('/', wrap(async (req, res) => {
@@ -200,7 +214,7 @@ function listQuery(req, q) {
   if (q.q) {
     const terms = String(q.q).trim().split(/\s+/).slice(0, 5);
     for (const t of terms) {
-      where.push(`(r.data LIKE ? OR c.name LIKE ? OR c.code LIKE ? OR CAST(r.id AS CHAR) = ?)`);
+      where.push(`(r.data LIKE ? OR c.name LIKE ? OR c.code LIKE ? OR CAST(r.number AS CHAR) = ?)`);
       params.push(`%${t}%`, `%${t}%`, `%${t}%`, t);
     }
   }
@@ -230,7 +244,7 @@ function listQuery(req, q) {
   const dir = q.dir === 'asc' ? 'ASC' : 'DESC';
   if (q.sort) {
     const f = req.fields.find((x) => x.key === q.sort && x.type !== 'password');
-    if (['id', 'created_at', 'updated_at', 'deleted_at'].includes(q.sort)) order = `r.${q.sort} ${dir}`;
+    if (['id', 'number', 'created_at', 'updated_at', 'deleted_at'].includes(q.sort)) order = `r.${q.sort} ${dir}`;
     else if (q.sort === 'center') order = `c.code ${dir}, c.name ${dir}`;
     else if (f) {
       order = ['number', 'decimal'].includes(f.type) ? `CAST(${jv(f.key)} AS DECIMAL(20,6)) ${dir}`
@@ -247,21 +261,22 @@ router.get('/:appKey/records', wrap(async (req, res) => {
   const page = Math.max(Number(req.query.page) || 1, 1);
   const total = (await get(`SELECT COUNT(*) n FROM records r LEFT JOIN centers c ON c.id = r.center_id WHERE ${where}`, ...params)).n;
   const rows = await all(`${SELECT_REC} WHERE ${where} ORDER BY ${order}, r.id DESC LIMIT ? OFFSET ?`, ...params, size, (page - 1) * size);
-  res.json({ total, page, size, rows: rows.map((r) => serialize(req, r)) });
+  res.json({ total, page, size, rows: rows.map((r) => serialize(req, r, false)) });
 }));
 
 router.get('/:appKey/records/:id', wrap(async (req, res) => res.json(serialize(req, await getRecord(req, req.params.id)))));
 
 // ---------- alta / modificación ----------
 async function insertRecord(req, centerId, data, summaryText) {
-  const id = Number((await run(`INSERT INTO records (app_id, company_id, center_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
-    req.appDef.id, req.companyId, centerId, JSON.stringify(data), req.user.id, req.user.id)).lastInsertRowid);
+  const number = await nextNumber(req.appDef.id, req.companyId);
+  const id = Number((await run(`INSERT INTO records (app_id, company_id, number, center_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
+    req.appDef.id, req.companyId, number, centerId, JSON.stringify(data), req.user.id, req.user.id)).lastInsertRowid);
   await audit(req, { entity: 'record', entityId: id, action: 'create', appId: req.appDef.id, companyId: req.companyId,
-    summary: summaryText, changes: diff({}, { ...data, _centro: centerId }, pwKeysOf(req)) });
+    summary: `${summaryText} · Nº ${number}`, changes: diff({}, { ...auditView(req, data), _centro: centerId }, pwKeysOf(req)) });
   return id;
 }
 async function updateRecord(req, rec, centerId, data, summaryText) {
-  const changes = diff({ ...JSON.parse(rec.data), _centro: rec.center_id }, { ...data, _centro: centerId }, pwKeysOf(req));
+  const changes = diff({ ...auditView(req, JSON.parse(rec.data)), _centro: rec.center_id }, { ...auditView(req, data), _centro: centerId }, pwKeysOf(req));
   if (!changes.length) return false;
   await run(`UPDATE records SET data = ?, center_id = ?, updated_by = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?`,
     JSON.stringify(data), centerId, req.user.id, rec.id);
@@ -318,7 +333,7 @@ async function purge(req, rec) {
   if (!rec.deleted_at) throw httpError(400, 'Solo se pueden eliminar definitivamente registros de la papelera');
   if (!can(req.grants, 'purge', req.user, rec)) throw httpError(403, 'Sin permiso para eliminar definitivamente');
   await audit(req, { entity: 'record', entityId: rec.id, action: 'purge', appId: req.appDef.id, companyId: req.companyId,
-    summary: 'Eliminado definitivamente', changes: diff(JSON.parse(rec.data), {}, pwKeysOf(req)) });
+    summary: `Eliminado definitivamente (Nº ${rec.number})`, changes: diff(auditView(req, JSON.parse(rec.data)), {}, pwKeysOf(req)) });
   await run('DELETE FROM share_links WHERE record_id = ?', rec.id);
   await run('DELETE FROM records WHERE id = ?', rec.id);
 }
@@ -370,7 +385,7 @@ router.post('/:appKey/records/:id/share', wrap(async (req, res) => {
   const data = JSON.parse(rec.data);
   const secret = decrypt(data[f.key]);
   if (!secret) throw httpError(400, 'La contraseña está vacía');
-  const title = data[req.appDef.title_field] || `#${rec.id}`;
+  const title = data[req.appDef.title_field] || `Nº ${rec.number}`;
   const code = shortCode(10);
   const h = Math.min(Math.max(Number(hours) || 24, 1), 24 * 30);
   await run(`INSERT INTO share_links (code, record_id, field_key, created_by, expires_at, max_views) VALUES (?,?,?,?,?,?)`,
@@ -428,11 +443,11 @@ router.get('/:appKey/export', wrap(async (req, res) => {
   const rows = await exportRows(req);
   const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
   const fields = req.fields.filter((f) => f.type !== 'password' || withPw);
-  const header = ['ID', 'Centro', ...fields.map((f) => f.label), 'Creado', 'Modificado', 'Estado'];
+  const header = ['Nº', 'Centro', ...fields.map((f) => f.label), 'Creado', 'Modificado', 'Estado'];
   const matrix = rows.map((r) => {
     const d = JSON.parse(r.data);
     const rowCanPw = withPw && can(req.grants, 'view_passwords', req.user, r);
-    return [r.id, r.center_code || r.center_name || '',
+    return [r.number, r.center_code || r.center_name || '',
       ...fields.map((f) => (f.type === 'password' ? (rowCanPw ? decrypt(d[f.key]) : '') : toText(f, d[f.key], users))),
       r.created_at, r.updated_at, r.deleted_at ? 'BORRADO' : 'Activo'];
   });
@@ -485,11 +500,11 @@ router.post('/:appKey/import/preview', upload.single('file'), wrap(async (req, r
   if (matrix.length < 2) throw httpError(400, 'El fichero no contiene datos (se espera una fila de cabecera y al menos una fila)');
   const header = matrix[0].map((h) => String(h).trim());
   const rows = matrix.slice(1);
-  const targets = [{ key: '_id', label: 'ID (actualizar existente)' }, { key: '_center', label: 'Centro (código o nombre)' },
-    ...req.fields.map((f) => ({ key: f.key, label: f.label, type: f.type }))];
+  const targets = [{ key: '_id', label: 'Nº (actualizar existente)' }, { key: '_center', label: 'Centro (código o nombre)' },
+    ...req.fields.filter((f) => f.type !== 'signature').map((f) => ({ key: f.key, label: f.label, type: f.type }))];
   const mapping = header.map((h) => {
     const n = norm(h);
-    if (n === 'id') return '_id';
+    if (['id', 'n', 'no', 'numero', 'num', 'nparte', 'numerodetrabajo', 'ntrabajo'].includes(n)) return '_id';
     if (['centro', 'center', 'centrodetrabajo', 'centrodecoste', 'cc'].includes(n)) return '_center';
     const f = req.fields.find((x) => norm(x.label) === n || norm(x.key) === n);
     return f ? f.key : '';
@@ -533,7 +548,7 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
             else input[target] = v ?? '';
           });
           let existing = null;
-          if (recId) existing = await get('SELECT * FROM records WHERE id = ? AND app_id = ? AND company_id = ? AND deleted_at IS NULL', recId, req.appDef.id, req.companyId);
+          if (recId) existing = await get('SELECT * FROM records WHERE number = ? AND app_id = ? AND company_id = ? AND deleted_at IS NULL', recId, req.appDef.id, req.companyId);
           if (!existing && matchF && input[matchF.key] !== undefined && String(input[matchF.key]).trim()) {
             const v = normalize(matchF, input[matchF.key], { users });
             existing = await get(`SELECT * FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL

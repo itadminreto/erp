@@ -31,16 +31,46 @@ const CSS = `
   .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 4px; background: var(--c); vertical-align: -1px; }
   .deleted td { color: #b00; text-decoration: line-through; }
   footer { margin-top: 12px; font-size: 8pt; color: #777; }
+
+  /* ----- parte / ficha profesional ----- */
+  .doc { color: #1f2937; }
+  .doc-head { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: stretch; padding-bottom: 10px; border-bottom: 3px solid var(--accent); }
+  .doc-company { display: flex; gap: 12px; align-items: center; }
+  .doc-company img { max-height: 56px; max-width: 170px; object-fit: contain; }
+  .doc-company .nm { font-size: 13pt; font-weight: 700; }
+  .doc-company .dt { font-size: 8.5pt; color: #555; line-height: 1.35; }
+  .doc-id { border: 1.5px solid var(--accent); border-radius: 6px; min-width: 54mm; text-align: right; overflow: hidden; }
+  .doc-id .ty { background: var(--accent); color: #fff; font-size: 8.5pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; }
+  .doc-id .no { font-size: 20pt; font-weight: 800; padding: 2px 10px 0; font-variant-numeric: tabular-nums; }
+  .doc-id .dd { font-size: 8.5pt; color: #555; padding: 0 10px 6px; }
+  .doc-title { font-size: 14pt; font-weight: 700; margin: 12px 0 2px; }
+  .doc-sub { font-size: 9pt; color: #555; margin-bottom: 8px; }
+  .sec { margin-top: 10px; page-break-inside: avoid; }
+  .sec-h { font-size: 8.5pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); border-bottom: 1px solid var(--accent); padding-bottom: 2px; margin-bottom: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; }
+  .box { border: 1px solid #c9ced6; border-radius: 4px; padding: 3px 7px 5px; min-height: 11mm; page-break-inside: avoid; }
+  .box .l { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; }
+  .box .v { font-size: 10pt; white-space: pre-wrap; word-break: break-word; min-height: 12pt; }
+  .box .v.empty { color: #c0c4cc; }
+  .s2 { grid-column: span 2; } .s3 { grid-column: span 3; } .s4 { grid-column: span 4; } .s6 { grid-column: span 6; } .s8 { grid-column: span 8; } .s12 { grid-column: span 12; }
+  .sigs { display: grid; grid-template-columns: repeat(auto-fit, minmax(55mm, 1fr)); gap: 10px; margin-top: 14px; page-break-inside: avoid; }
+  .sig { border: 1px solid #c9ced6; border-radius: 4px; padding: 4px 8px 6px; }
+  .sig .l { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; }
+  .sig .im { height: 26mm; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid #9ca3af; margin: 2px 0 4px; }
+  .sig .im img { max-height: 24mm; max-width: 100%; }
+  .sig .d { font-size: 7.5pt; color: #6b7280; }
+  .doc-foot { margin-top: 14px; padding-top: 5px; border-top: 1px solid #d1d5db; font-size: 7.5pt; color: #6b7280; display: flex; justify-content: space-between; gap: 10px; }
+  .stamp { display: inline-block; border: 2px solid #b91c1c; color: #b91c1c; font-weight: 800; padding: 2px 8px; border-radius: 4px; transform: rotate(-4deg); margin-left: 8px; font-size: 9pt; }
 `;
 
 /** Imprime `bodyHtml` (HTML ya escapado) con cabecera corporativa. */
-export function printDoc({ title, subtitle = '', bodyHtml, landscape = false }) {
+export function printDoc({ title, subtitle = '', bodyHtml, landscape = false, bare = false }) {
   const company = (state.me.companies || []).find((c) => c.id === state.companyId);
   const logo = company && company.has_logo ? `<img src="/api/companies/${company.id}/logo" alt="">` : '';
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title>
     <style>${CSS.replace('PORTRAIT', landscape ? 'landscape' : 'portrait')}</style></head><body>
-    <header>${logo}<div class="t"><h1>${esc(title)}</h1><div class="sub">${esc(company ? company.name : '')}${subtitle ? ' · ' + esc(subtitle) : ''}</div></div>
-    <div class="meta">${esc(fmtDateTime(new Date().toISOString()))}<br>${esc(state.me.name)}</div></header>
+    ${bare ? '' : `<header>${logo}<div class="t"><h1>${esc(title)}</h1><div class="sub">${esc(company ? company.name : '')}${subtitle ? ' · ' + esc(subtitle) : ''}</div></div>
+    <div class="meta">${esc(fmtDateTime(new Date().toISOString()))}<br>${esc(state.me.name)}</div></header>`}
     ${bodyHtml}
     </body></html>`;
   const frame = document.createElement('iframe');

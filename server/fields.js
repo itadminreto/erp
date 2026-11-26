@@ -6,7 +6,7 @@ const FIELD_TYPES = {
   text: 'Texto', textarea: 'Texto largo', number: 'Número entero', decimal: 'Número decimal',
   date: 'Fecha', datetime: 'Fecha y hora', email: 'Email', phone: 'Teléfono', url: 'URL',
   select: 'Lista desplegable', multiselect: 'Selección múltiple', checkbox: 'Sí / No',
-  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)', ip: 'Dirección IP',
+  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)', ip: 'Dirección IP', signature: 'Firma (en pantalla)',
 };
 
 function parseField(f) {
@@ -105,6 +105,13 @@ function normalize(field, raw, ctx = {}) {
     }
     case 'iban': return normIban(raw, L);
     case 'ip': return normIp(raw, L);
+    case 'signature': {
+      // imagen PNG dibujada en pantalla; se guarda como { img, at }
+      const img = typeof raw === 'object' && raw ? raw.img : raw;
+      if (!img) return '';
+      if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(String(img)) || String(img).length > 400000) throw new Error(`${L}: firma no válida`);
+      return { img: String(img), at: (raw && raw.at) || new Date().toISOString() };
+    }
     case 'url': {
       let s = String(raw).trim();
       if (!/^[a-z]+:\/\//i.test(s)) s = 'https://' + s;
@@ -158,6 +165,7 @@ function toText(field, v, usersById = {}) {
     case 'multiselect': return Array.isArray(v) ? v.join(', ') : String(v);
     case 'user': return usersById[v] ? usersById[v].name : String(v);
     case 'iban': return fmtIban(v);
+    case 'signature': return v && v.img ? `Firmado ${String(v.at || '').slice(0, 10)}` : '';
     default: return v;
   }
 }

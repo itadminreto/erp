@@ -333,7 +333,8 @@ router.post('/apps', wrap(async (req, res) => {
 router.put('/apps/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM apps WHERE id = ?', Number(req.params.id));
   if (!before) throw httpError(404, 'No encontrada');
-  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar']);
+  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar', 'number_start']);
+  if ('number_start' in d) { d.number_start = Math.round(Number(d.number_start)); if (!Number.isFinite(d.number_start) || d.number_start < 0 || d.number_start > 1e9) throw httpError(400, 'Inicio de numeración no válido'); }
   if ('active' in d) d.active = bool(d.active);
   if ('calendar' in d) d.calendar = bool(d.calendar);
   const keys = Object.keys(d);
@@ -351,7 +352,8 @@ router.put('/apps/:id/design', wrap(async (req, res) => {
   if (!app) throw httpError(404, 'Aplicación no encontrada');
   const fields = await appFields(app.id, true);
   const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
-  const { items = [], widths = {}, heights = {}, tabs = false } = req.body || {};
+  const { items = [], widths = {}, heights = {}, tabs = false, label_size = null, input_size = null } = req.body || {};
+  const px = (v, min, max) => (v === null || v === '' || v === undefined ? null : Math.min(Math.max(Math.round(Number(v)) || min, min), max));
   if (!Array.isArray(items) || items.length > 500) throw httpError(400, 'Diseño no válido');
   const clean = []; const seen = new Set(); let sections = 0;
   for (const it of items) {
@@ -369,7 +371,7 @@ router.put('/apps/:id/design', wrap(async (req, res) => {
       await run(`UPDATE fields SET sort = ?${WIDTHS.includes(w) ? ', width = ?' : ''}${hv ? ', height = ?' : ''} WHERE id = ?`,
         i, ...(WIDTHS.includes(w) ? [w] : []), ...(hv ? [hv] : []), byKey[k].id);
     }
-    await run('UPDATE apps SET form_layout = ? WHERE id = ?', JSON.stringify({ tabs: bool(tabs) === 1, items: clean }), app.id);
+    await run('UPDATE apps SET form_layout = ? WHERE id = ?', JSON.stringify({ tabs: bool(tabs) === 1, items: clean, label_size: px(label_size, 10, 22), input_size: px(input_size, 11, 24) }), app.id);
   });
   await audit(req, { entity: 'apps', entityId: app.id, appId: app.id, action: 'update',
     summary: `Diseño del formulario de ${app.name}: ${sections} sección/es${bool(tabs) ? ', en pestañas' : ''}` });

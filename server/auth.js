@@ -65,10 +65,10 @@ function requireSuper(req, res, next) {
 
 async function userCompanies(user) {
   if (user.is_superadmin) {
-    return all('SELECT id, name, (logo IS NOT NULL) has_logo FROM companies WHERE deleted_at IS NULL AND active = 1 ORDER BY name');
+    return all('SELECT id, name, cif, address, phone, email, (logo IS NOT NULL) has_logo FROM companies WHERE deleted_at IS NULL AND active = 1 ORDER BY name');
   }
   return all(
-    `SELECT DISTINCT c.id, c.name, (c.logo IS NOT NULL) has_logo FROM user_assignments a JOIN companies c ON c.id = a.company_id
+    `SELECT DISTINCT c.id, c.name, c.cif, c.address, c.phone, c.email, (c.logo IS NOT NULL) has_logo FROM user_assignments a JOIN companies c ON c.id = a.company_id
      WHERE a.user_id = ? AND c.deleted_at IS NULL AND c.active = 1 ORDER BY c.name`, user.id
   );
 }

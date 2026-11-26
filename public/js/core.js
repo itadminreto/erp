@@ -219,3 +219,60 @@ export function ipMask(input) {
   mark(false);
   return input;
 }
+
+/**
+ * Ventana para firmar con el dedo, lápiz o ratón. Devuelve una imagen PNG (data URL) o null si se cancela.
+ */
+export function signaturePad(title = 'Firmar') {
+  return new Promise((resolve) => {
+    let result = null, drawn = false;
+    const canvas = h('canvas.sig-canvas');
+    const hint = h('div.sig-hint', 'Firme aquí');
+    const wrap = h('div.sig-wrap', canvas, hint, h('div.sig-line'));
+    const m = modal({
+      title: '✍ ' + title, size: '',
+      content: [h('p.muted.small', 'Firme dentro del recuadro con el dedo, un lápiz táctil o el ratón.'), wrap],
+      footer: [h('button.btn', { onclick: () => clearPad() }, '↺ Borrar'), h('div.spacer'),
+        h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
+        h('button.btn.primary', { onclick: () => {
+          if (!drawn) return toast('Firme antes de aceptar', 'error');
+          result = trimmed(); m.close();
+        } }, 'Aceptar firma')],
+      onClose: () => resolve(result),
+    });
+    const ctx = canvas.getContext('2d');
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const setup = () => {
+      const r = canvas.getBoundingClientRect();
+      canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+      ctx.scale(dpr, dpr); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111827'; ctx.lineWidth = 2.4;
+    };
+    requestAnimationFrame(setup);
+    function clearPad() { ctx.clearRect(0, 0, canvas.width, canvas.height); drawn = false; hint.hidden = false; }
+    let last = null;
+    const pos = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+    canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); last = pos(e); ctx.beginPath(); ctx.arc(last.x, last.y, 1.1, 0, Math.PI * 2); ctx.fillStyle = '#111827'; ctx.fill(); drawn = true; hint.hidden = true; });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!last) return;
+      const p = pos(e);
+      const mid = { x: (last.x + p.x) / 2, y: (last.y + p.y) / 2 };
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.quadraticCurveTo(last.x, last.y, mid.x, mid.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      last = p;
+    });
+    const end = () => { last = null; };
+    canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
+    // recorta el espacio vacío y reduce a un tamaño razonable (fondo transparente)
+    function trimmed() {
+      const { width: w, height: hgt } = canvas;
+      const px = ctx.getImageData(0, 0, w, hgt).data;
+      let x0 = w, y0 = hgt, x1 = 0, y1 = 0;
+      for (let y = 0; y < hgt; y++) for (let x = 0; x < w; x++) if (px[(y * w + x) * 4 + 3] > 0) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      const pad = 8 * dpr; x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w, x1 + pad); y1 = Math.min(hgt, y1 + pad);
+      const scale = Math.min(1, 600 / (x1 - x0), 220 / (y1 - y0));
+      const out = document.createElement('canvas');
+      out.width = Math.max(1, Math.round((x1 - x0) * scale)); out.height = Math.max(1, Math.round((y1 - y0) * scale));
+      out.getContext('2d').drawImage(canvas, x0, y0, x1 - x0, y1 - y0, 0, 0, out.width, out.height);
+      return out.toDataURL('image/png');
+    }
+  });
+}

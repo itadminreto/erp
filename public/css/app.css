@@ -341,3 +341,24 @@ input.invalid { border-color: var(--danger); outline-color: color-mix(in srgb, v
 .dz-field:hover .dz-rs-y::after, .dz-field:hover .dz-rs-xy::after, .dz-field.resizing .dz-rs-y::after, .dz-field.resizing .dz-rs-xy::after { opacity: 1; }
 .dz-canvas.mobile .dz-rs-xy { display: none; }
 .dz-sep { margin-left: 8px; }
+
+/* ---------- firma en pantalla ---------- */
+.sig-wrap { position: relative; border: 1.5px dashed var(--border); border-radius: 12px; background: #fff; height: min(46vh, 300px); touch-action: none; }
+.sig-canvas { width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; border-radius: 12px; }
+.sig-hint { position: absolute; inset: 0; display: grid; place-items: center; color: #9ca3af; font-size: 1.3rem; pointer-events: none; }
+.sig-line { position: absolute; left: 8%; right: 8%; bottom: 24%; border-bottom: 1px solid #cbd5e1; pointer-events: none; }
+.sig-field { border: 1px solid var(--border); border-radius: 8px; background: #fff; min-height: 96px; display: flex; align-items: center; justify-content: center; padding: 6px; }
+.sig-field img { max-height: 110px; max-width: 100%; }
+.sig-field .muted { color: #9ca3af; }
+.sig-meta { font-size: .76rem; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* tamaño de letra configurable en el diseñador (por app) */
+.form-grid .field > label { font-size: var(--lbl-fs, .78rem); }
+.form-grid .field input:not([type=checkbox]):not([type=color]), .form-grid .field select, .form-grid .field textarea, .form-grid .dz-fake { font-size: var(--inp-fs, 14px); }
+.num { font-variant-numeric: tabular-nums; }
+.rec-card .t .num { color: var(--primary); font-size: .85rem; }
+.num-badge { font-size: .8rem; font-weight: 700; color: var(--primary); background: var(--primary-2); border-radius: 6px; padding: 2px 8px; font-variant-numeric: tabular-nums; flex: none; }
+.fs-ctl { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.fs-val { min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; font-size: .85rem; }
+.dz-field > label { font-size: var(--lbl-fs, .78rem); }
+.sig-meta > span:first-child { flex-basis: 100%; }

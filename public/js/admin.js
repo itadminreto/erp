@@ -310,6 +310,7 @@ export async function renderAppsAdmin(root, onChange) {
       { key: 'name', label: 'Nombre', value: a.name }, { key: 'icon', label: 'Icono (emoji)', value: a.icon }, { key: 'color', label: 'Color', type: 'color', value: a.color },
       { key: 'description', label: 'Descripción', value: a.description },
       { key: 'title_field', label: 'Campo título (identifica cada registro)', type: 'select', value: a.title_field, options: a.fields.filter((f) => f.type !== 'password').map((f) => ({ value: f.key, label: f.label })) },
+      { key: 'number_start', label: 'Numeración: empieza en', type: 'number', value: a.number_start ?? 1000, help: 'Primer número de registro (Nº de trabajo). Si ya hay números mayores, se sigue desde el último.' },
       { key: 'calendar', label: 'Vista calendario (necesita algún campo de fecha)', type: 'checkbox', value: !!a.calendar },
       { key: 'active', label: 'Aplicación activa', type: 'checkbox', value: !!a.active }]);
     if (!v) return;
@@ -478,7 +479,7 @@ const DZ_WIDTHS = [['xs', 'Muy estrecho', 2], ['sm', 'Estrecho', 3], ['md', 'Med
 const DZ_TALL = ['textarea', 'multiselect'];
 const DZ_TYPE_HINT = { text: 'Texto', textarea: 'Texto largo…', number: '123', decimal: '1,50', date: 'dd/mm/aaaa', datetime: 'dd/mm/aaaa hh:mm', email: 'nombre@dominio.com',
   phone: '600 000 000', url: 'https://', select: 'Elegir… ▾', multiselect: 'Elegir varios… ▾', checkbox: '☐ Sí', password: '••••••••  👁 🎲', user: 'Usuario… ▾',
-  color: '■', iban: 'ES00 0000 0000 0000 0000 0000', ip: '192.168.1.10' };
+  color: '■', iban: 'ES00 0000 0000 0000 0000 0000', ip: '192.168.1.10', signature: '✍ Firma en pantalla' };
 
 export async function renderFormDesigner(root, appId) {
   const [apps, types] = await Promise.all([api('/admin/apps'), api('/admin/field-types')]);
@@ -593,6 +594,18 @@ export async function renderFormDesigner(root, appId) {
 
   // ----- barra de herramientas -----
   const tabsCb = h('input', { type: 'checkbox', checked: !!layout.tabs, onchange: setDirty });
+  // tamaño de letra de etiquetas y campos (px); null = el de por defecto
+  const sizes = { label: layout.label_size || null, input: layout.input_size || null };
+  const DEF = { label: 11, input: 14 }, LIM = { label: [10, 22], input: [11, 24] };
+  const applySizes = () => {
+    canvas.style.setProperty('--lbl-fs', (sizes.label || DEF.label) + 'px');
+    canvas.style.setProperty('--inp-fs', (sizes.input || DEF.input) + 'px');
+    lblVal.textContent = sizes.label || DEF.label; inpVal.textContent = sizes.input || DEF.input;
+  };
+  const lblVal = h('strong.fs-val'), inpVal = h('strong.fs-val');
+  const fsCtl = (which, val, label) => h('div.fs-ctl', { title: `Tamaño de letra de ${label.toLowerCase()}` }, h('span.small.muted', label),
+    h('button.btn.sm', { onclick: () => { sizes[which] = Math.max(LIM[which][0], (sizes[which] || DEF[which]) - 1); applySizes(); setDirty(); } }, 'A−'), val,
+    h('button.btn.sm', { onclick: () => { sizes[which] = Math.min(LIM[which][1], (sizes[which] || DEF[which]) + 1); applySizes(); setDirty(); } }, 'A+'));
   const viewSeg = h('div.seg',
     h('button.on', { onclick: (e) => setView(e, false) }, '🖥 Ordenador'),
     h('button', { onclick: (e) => setView(e, true) }, '📱 Móvil'));
@@ -610,7 +623,7 @@ export async function renderFormDesigner(root, appId) {
       items.push(...[...sec.querySelector('.dz-grid').children].map((c) => c.dataset.key));
     }
     try {
-      await api(`/admin/apps/${app.id}/design`, { method: 'PUT', body: { items, widths, heights, tabs: tabsCb.checked } });
+      await api(`/admin/apps/${app.id}/design`, { method: 'PUT', body: { items, widths, heights, tabs: tabsCb.checked, label_size: sizes.label, input_size: sizes.input } });
       dirty = false; saveBtn.disabled = true; status.textContent = 'Guardado ✔';
       toast('Diseño guardado: ya se aplica al formulario de ' + app.name, 'ok');
     } catch (e) { toastErr(e); }
@@ -622,6 +635,9 @@ export async function renderFormDesigner(root, appId) {
     h('div.toolbar',
       h('button.btn', { onclick: () => { const s = sectionEl('Nueva sección', []); sectionsBox.append(s); s.querySelector('.dz-title').select(); setDirty(); s.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }, '＋ Añadir sección'),
       h('label.check', tabsCb, 'Mostrar las secciones como pestañas'),
+      fsCtl('label', lblVal, 'Etiquetas'), fsCtl('input', inpVal, 'Campos'),
+      h('button.btn.sm.ghost', { title: 'Volver al tamaño de letra por defecto', onclick: () => { sizes.label = null; sizes.input = null; applySizes(); setDirty(); } }, '↺'),
       h('div.spacer'), status, viewSeg),
     h('div.dz-stage', h('div.card.dz-paper', h('div.dz-paper-head', h('span', app.icon), h('strong', `Nuevo · ${app.name}`)), canvas)));
+  applySizes();
 }

@@ -150,7 +150,7 @@ test('exportación Excel y CSV', async () => {
   assert.equal(x.status, 200); assert.equal(x.body.subarray(0, 2).toString(), 'PK');
   const c = await admin.call('GET', '/apps/vehiculos/export?format=csv');
   const text = c.body.toString('utf8');
-  assert.match(text, /^﻿ID;Centro;Matrícula/);
+  assert.match(text, /^﻿Nº;Centro;Matrícula/);
   assert.ok(!text.includes('9876'), 'sin contraseñas por defecto');
   const cp = await admin.call('GET', '/apps/vehiculos/export?format=csv&passwords=1');
   assert.ok(cp.body.toString('utf8').includes('9876'));
@@ -363,7 +363,7 @@ test('diseñador de formularios: secciones, orden, anchos y pestañas', async ()
   assert.equal(r.status, 200);
   const after = (await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'vehiculos');
   const layout = JSON.parse(after.form_layout);
-  assert.deepEqual(layout, { tabs: true, items: ['matricula', 'marca', { section: 'Seguro' }, 'seguro_compania', 'seguro_poliza', { section: 'Sección' }, 'itv_proxima'] },
+  assert.deepEqual(layout, { tabs: true, items: ['matricula', 'marca', { section: 'Seguro' }, 'seguro_compania', 'seguro_poliza', { section: 'Sección' }, 'itv_proxima'], label_size: null, input_size: null },
     'limpia claves desconocidas, duplicados y títulos vacíos');
   const f = Object.fromEntries(after.fields.map((x) => [x.key, x]));
   assert.equal(f.matricula.width, 'sm'); assert.equal(f.seguro_poliza.width, 'lg'); assert.notEqual(f.marca.width, 'enorme');
@@ -385,4 +385,41 @@ test('diseñador: altura en filas solo para texto largo y selección múltiple',
   await admin.call('PUT', `/admin/apps/${cred.id}/design`, { items, heights: { notas: 99 } });
   const n = (await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'credenciales').fields.find((x) => x.key === 'notas');
   assert.equal(n.height, 8, 'máximo 8 filas');
+});
+
+test('número de trabajo por app: empieza en 1000, se busca y no se reutiliza', async () => {
+  const mk = (t) => admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: t } });
+  const a = await mk('Parte A'), b = await mk('Parte B');
+  assert.equal(a.body.number, 1000); assert.equal(b.body.number, 1001);
+  const v = await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'NUM-1' } });
+  assert.ok(v.body.number >= 1000, 'cada app tiene su propia numeración');
+  const s = await admin.call('GET', '/apps/recados/records?q=1001');
+  assert.deepEqual(s.body.rows.map((r) => r.number), [1001], 'búsqueda por número');
+  // borrar definitivamente el último no hace que se reutilice su número
+  await admin.call('DELETE', `/apps/recados/records/${b.body.id}`);
+  await admin.call('DELETE', `/apps/recados/records/${b.body.id}/purge`);
+  assert.equal((await mk('Parte C')).body.number, 1002);
+  // cambiar el inicio de numeración
+  const rec = (await admin.call('GET', '/admin/apps')).body.find((x) => x.key === 'recados');
+  await admin.call('PUT', `/admin/apps/${rec.id}`, { number_start: 5000 });
+  assert.equal((await mk('Parte D')).body.number, 5000);
+  const csv = (await admin.call('GET', '/apps/recados/export?format=csv')).body.toString('utf8');
+  assert.match(csv, /\n5000;/, 'la exportación lleva el Nº');
+});
+
+test('campo Firma: se guarda la imagen y la fecha, no se reenvía en listados ni en la auditoría', async () => {
+  const rec = (await admin.call('GET', '/admin/apps')).body.find((x) => x.key === 'recados');
+  await admin.call('POST', `/admin/apps/${rec.id}/fields`, { label: 'Firma del cliente', type: 'signature' });
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const r = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Firmado', firma_del_cliente: png } });
+  assert.equal(r.status, 201); assert.equal(r.body.data.firma_del_cliente.img, png); assert.ok(r.body.data.firma_del_cliente.at);
+  const at = r.body.data.firma_del_cliente.at;
+  // editar otro campo enviando la misma firma conserva la fecha original
+  const u = await admin.call('PUT', `/apps/recados/records/${r.body.id}`, { data: { titulo: 'Firmado 2', firma_del_cliente: png } });
+  assert.equal(u.body.data.firma_del_cliente.at, at);
+  const list = await admin.call('GET', `/apps/recados/records?q=${r.body.number}`);
+  assert.deepEqual(list.body.rows[0].data.firma_del_cliente, { signed: true, at }, 'el listado no lleva la imagen');
+  const hist = await admin.call('GET', `/apps/recados/records/${r.body.id}/history`);
+  assert.ok(!JSON.stringify(hist.body).includes('base64'), 'la auditoría no guarda la imagen');
+  assert.equal((await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'X', firma_del_cliente: 'data:text/html,<b>' } })).status, 400);
 });

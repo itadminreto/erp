@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
-const { all, run, tx, DATA_DIR, BACKUP_TABLES } = require('./db');
+const { all, run, tx, DATA_DIR, BACKUP_TABLES, assignMissingNumbers } = require('./db');
 const { encrypt, decrypt } = require('./crypto');
 const { getSetting } = require('./mailer');
 
@@ -130,6 +130,7 @@ async function restoreBackup(buf, { force = false } = {}) {
       await run('SET FOREIGN_KEY_CHECKS = 1');
     }
   });
+  await assignMissingNumbers(); // copias anteriores a la numeración por app
   return { counts, safety: safety.name, created_at: doc.created_at, same_secret: sameSecret(doc) };
 }
 

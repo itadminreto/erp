@@ -267,6 +267,14 @@ async function init() {
     await pool.query(`ALTER TABLE ${t} ALTER COLUMN width SET DEFAULT 'md'`);
     await pool.query(`UPDATE ${t} SET width = CASE width WHEN 'half' THEN 'md' WHEN 'third' THEN 'sm' ELSE width END WHERE width IN ('half', 'third')`);
   }
+  // Numeración propia por aplicación y empresa (Nº de trabajo), empezando en apps.number_start
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS number_start INT NOT NULL DEFAULT 1000');
+  await pool.query('ALTER TABLE records ADD COLUMN IF NOT EXISTS number INT NULL AFTER company_id');
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_records_number ON records (app_id, company_id, number)');
+  await pool.query(`CREATE TABLE IF NOT EXISTS record_counters (
+    app_id INT NOT NULL, company_id INT NOT NULL, next_number INT NOT NULL,
+    PRIMARY KEY (app_id, company_id)) ENGINE=InnoDB`);
+  await assignMissingNumbers();
   // «IP fija» de Fibras pasa al nuevo tipo «Dirección IP» (una sola vez)
   const ipDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_ip_type_v1'");
   if (!ipDone.length) {
@@ -295,10 +303,49 @@ const MIGRATIONS = [
   'ALTER TABLE companies ADD COLUMN IF NOT EXISTS extra LONGTEXT NULL',
 ];
 
+/**
+ * Da número a los registros que no lo tienen (los existentes al actualizar, o los de una copia antigua restaurada),
+ * en orden de creación, y deja los contadores por encima del mayor número usado.
+ */
+async function assignMissingNumbers() {
+  const pending = await pool.query(`SELECT r.id, r.app_id, r.company_id FROM records r WHERE r.number IS NULL ORDER BY r.app_id, r.company_id, r.id`);
+  if (pending.length) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const next = {};
+      for (const r of pending) {
+        const k = `${r.app_id}:${r.company_id}`;
+        if (next[k] === undefined) {
+          const [x] = await conn.query(`SELECT GREATEST(COALESCE(MAX(r.number) + 1, 0), a.number_start) n FROM apps a
+            LEFT JOIN records r ON r.app_id = a.id AND r.company_id = ? WHERE a.id = ? GROUP BY a.id`, [r.company_id, r.app_id]);
+          next[k] = x ? x.n : 1000;
+        }
+        await conn.query('UPDATE records SET number = ? WHERE id = ?', [next[k]++, r.id]);
+      }
+      await conn.commit();
+    } catch (e) { await conn.rollback(); throw e; } finally { conn.release(); }
+  }
+  await pool.query(`INSERT INTO record_counters (app_id, company_id, next_number)
+    SELECT app_id, company_id, MAX(number) + 1 FROM records GROUP BY app_id, company_id
+    ON DUPLICATE KEY UPDATE next_number = GREATEST(next_number, VALUES(next_number))`);
+}
+
+/** Siguiente número de la app en la empresa (llamar dentro de tx: bloquea el contador). */
+async function nextNumber(appId, companyId) {
+  const app = (await query('SELECT number_start FROM apps WHERE id = ?', [appId]))[0];
+  const start = app ? app.number_start : 1000;
+  await query('INSERT IGNORE INTO record_counters (app_id, company_id, next_number) VALUES (?,?,?)', [appId, companyId, start]);
+  const row = (await query('SELECT next_number FROM record_counters WHERE app_id = ? AND company_id = ? FOR UPDATE', [appId, companyId]))[0];
+  const n = Math.max(row.next_number, start);
+  await query('UPDATE record_counters SET next_number = ? WHERE app_id = ? AND company_id = ?', [n + 1, appId, companyId]);
+  return n;
+}
+
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
 const BACKUP_TABLES = ['companies', 'centers', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
   'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields'];
 
 const close = () => pool.end();
 
-module.exports = { pool, all, get, run, tx, init, close, sqlDate, DATA_DIR, DB_NAME, BACKUP_TABLES };
+module.exports = { pool, all, get, run, tx, init, close, sqlDate, DATA_DIR, DB_NAME, BACKUP_TABLES, nextNumber, assignMissingNumbers };

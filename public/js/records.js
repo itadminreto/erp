@@ -1,14 +1,14 @@
 // Vista de una aplicación: listado, formulario dinámico, papelera, historial, importación/exportación y envío de contraseñas.
 import {
   api, h, clear, toast, toastErr, modal, confirmDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
-  genPassword, copy, sortable, ACTION_LABELS, state, ipMask,
+  genPassword, copy, sortable, ACTION_LABELS, state, ipMask, signaturePad,
 } from './core.js';
 import { printDoc, esc } from './print.js';
 
 const MASK = '••••••••';
 const META_COLS = {
   _center: { key: '_center', label: 'Centro', sortKey: 'center' },
-  _id: { key: '_id', label: 'ID', sortKey: 'id' },
+  _num: { key: '_num', label: 'Nº', sortKey: 'number' },
   _updated_at: { key: '_updated_at', label: 'Modificado', sortKey: 'updated_at' },
   _created_at: { key: '_created_at', label: 'Creado', sortKey: 'created_at' },
   _updated_by: { key: '_updated_by', label: 'Modificado por' },
@@ -34,10 +34,10 @@ export async function renderApp(root, key, onCountsChanged) {
   if (!/^\d{4}-\d{2}$/.test(st.calMonth)) st.calMonth = new Date().toISOString().slice(0, 7);
 
   // ----- columnas (diseño por usuario) -----
-  const defaultCols = () => ['_center', ...meta.fields.filter((f) => f.show_in_list).map((f) => f.key), '_updated_at'];
-  const allColKeys = () => ['_id', '_center', ...meta.fields.map((f) => f.key), '_created_at', '_updated_at', '_updated_by'];
+  const defaultCols = () => ['_num', '_center', ...meta.fields.filter((f) => f.show_in_list).map((f) => f.key), '_updated_at'];
+  const allColKeys = () => ['_num', '_center', ...meta.fields.map((f) => f.key), '_created_at', '_updated_at', '_updated_by'];
   let columns = (meta.layouts.list && meta.layouts.list.columns) || defaultCols();
-  columns = columns.filter((c) => META_COLS[c] || fieldsByKey[c]);
+  columns = columns.map((c) => (c === '_id' ? '_num' : c)).filter((c) => META_COLS[c] || fieldsByKey[c]);
   const colDef = (c) => META_COLS[c] || { key: c, label: fieldsByKey[c].label, sortKey: fieldsByKey[c].type === 'password' ? null : c, field: fieldsByKey[c] };
   const saveColumns = () => api(`/apps/${key}/layout/list`, { method: 'PUT', body: { columns } }).catch(toastErr);
 
@@ -110,6 +110,7 @@ export async function renderApp(root, key, onCountsChanged) {
   function cellText(r, c) {
     const f = fieldsByKey[c];
     if (f && f.type === 'password') return r.data[c] ? '••••••' : '';
+    if (f && f.type === 'signature') return r.data[c] && (r.data[c].signed || r.data[c].img) ? `Firmado ${fmtDateTime(r.data[c].at)}` : '';
     if (f && f.type === 'select') return r.data[c] || '';
     if (f && f.type === 'url') return r.data[c] || '';
     if (f && f.type === 'textarea') return r.data[c] || '';
@@ -147,17 +148,50 @@ export async function renderApp(root, key, onCountsChanged) {
       printDoc({ title: meta.app.name, subtitle: filterSummary(), bodyHtml: body, landscape: cols.length > 6 });
     } catch (e) { toastErr(e); }
   }
+  /** Parte / ficha imprimible: cabecera con empresa y Nº, campos en recuadros según el diseño y casillas de firma. */
   function printRecord(rec) {
-    const rows = [['Centro', rec.center_name ? `${rec.center_code ? rec.center_code + ' · ' : ''}${rec.center_name}` : '—']];
-    for (const g of formGroups().groups) {
-      if (g.title) rows.push([null, g.title]);
-      for (const k of g.keys) rows.push([fieldsByKey[k].label, cellText(rec, k) || '—']);
-    }
-    const firma = key === 'recados'
-      ? '<div class="firma"><div>Entregado por</div><div>Recibido por</div><div>Fecha y firma de realización</div></div>' : '';
-    const body = `<table class="ficha"><tbody>${rows.map(([l, v]) => (l === null ? `<tr><th colspan="2" class="sec">${esc(v)}</th></tr>` : `<tr><th>${esc(l)}</th><td>${esc(v)}</td></tr>`)).join('')}</tbody></table>
-      <footer>#${rec.id} · Creado ${esc(fmtDateTime(rec.created_at))}${rec.created_by_name ? ' por ' + esc(rec.created_by_name) : ''} · Modificado ${esc(fmtDateTime(rec.updated_at))}${rec.deleted_at ? ' · EN LA PAPELERA' : ''}</footer>${firma}`;
-    printDoc({ title: String(rec.data[meta.app.title_field] || `${meta.app.name} #${rec.id}`), subtitle: meta.app.name, bodyHtml: body });
+    const company = (state.me.companies || []).find((c) => c.id === state.companyId) || {};
+    const SPAN = { xs: 2, sm: 3, md: 4, lg: 6, xl: 8, full: 12, half: 4, third: 3 };
+    const sigFields = meta.fields.filter((f) => f.type === 'signature');
+    const box = (label, value, span, rows = 1) => `<div class="box s${span}"${rows > 1 ? ` style="min-height:${11 * rows}mm"` : ''}>
+      <div class="l">${esc(label)}</div><div class="v${value ? '' : ' empty'}">${value ? esc(value) : '—'}</div></div>`;
+    let html = '';
+    const groups = formGroups().groups;
+    groups.forEach((g, gi) => {
+      const keys = g.keys.filter((k) => fieldsByKey[k].type !== 'signature' && !(k === meta.app.title_field && rec.data[k])); // el título ya va en la cabecera
+      if (!keys.length && !(gi === 0)) return;
+      let inner = gi === 0 && meta.centers.length
+        ? box('Centro', rec.center_name ? `${rec.center_code ? rec.center_code + ' · ' : ''}${rec.center_name}` : '', 4) : '';
+      for (const k of keys) {
+        const f = fieldsByKey[k];
+        const span = f.type === 'textarea' && !SPAN[f.width] ? 12 : (SPAN[f.width] || 4);
+        inner += box(f.label, cellText(rec, k), span, ['textarea', 'multiselect'].includes(f.type) ? (f.height || 1) + (f.type === 'textarea' ? 1 : 0) : 1);
+      }
+      if (inner) html += `<div class="sec">${g.title ? `<div class="sec-h">${esc(g.title)}</div>` : ''}<div class="grid">${inner}</div></div>`;
+    });
+    // firmas: los campos «Firma» de la app; en Recados, si no hay ninguno, casillas en blanco para firmar a mano
+    let sigs = sigFields.map((f) => {
+      const v = rec.data[f.key];
+      return `<div class="sig"><div class="l">${esc(f.label)}</div><div class="im">${v && v.img ? `<img src="${esc(v.img)}" alt="">` : ''}</div>
+        <div class="d">${v && v.at ? 'Firmado el ' + esc(fmtDateTime(v.at)) : 'Fecha:'}</div></div>`;
+    }).join('');
+    if (!sigFields.length && key === 'recados') sigs = ['Entregado por', 'Recibido por', 'Realizado (fecha y firma)'].map((l) => `<div class="sig"><div class="l">${l}</div><div class="im"></div><div class="d">Nombre y fecha:</div></div>`).join('');
+    const titleVal = rec.data[meta.app.title_field];
+    const body = `<div class="doc" style="--accent:${esc(meta.app.color || '#334155')}">
+      <div class="doc-head">
+        <div class="doc-company">${company.has_logo ? `<img src="/api/companies/${company.id}/logo" alt="">` : ''}
+          <div><div class="nm">${esc(company.name || '')}</div>
+          <div class="dt">${[company.cif ? 'CIF ' + company.cif : '', company.address, [company.phone, company.email].filter(Boolean).join(' · ')].filter(Boolean).map(esc).join('<br>')}</div></div></div>
+        <div class="doc-id"><div class="ty">${esc(meta.app.name)}</div><div class="no">Nº ${esc(rec.number)}</div>
+          <div class="dd">Fecha: ${esc(fmtDate(String(rec.created_at).slice(0, 10)))}</div></div>
+      </div>
+      ${titleVal ? `<div class="doc-title">${esc(cellText(rec, meta.app.title_field))}${rec.deleted_at ? '<span class="stamp">ANULADO</span>' : ''}</div>` : ''}
+      <div class="doc-sub">Creado el ${esc(fmtDateTime(rec.created_at))}${rec.created_by_name ? ' por ' + esc(rec.created_by_name) : ''}${rec.updated_at !== rec.created_at ? ` · Última modificación ${esc(fmtDateTime(rec.updated_at))}` : ''}</div>
+      ${html}
+      ${sigs ? `<div class="sigs">${sigs}</div>` : ''}
+      <div class="doc-foot"><span>${esc(company.name || '')} · ${esc(meta.app.name)} Nº ${esc(rec.number)}</span><span>Impreso el ${esc(fmtDateTime(new Date().toISOString()))} por ${esc(state.me.name)}</span></div>
+    </div>`;
+    printDoc({ title: `${meta.app.name} Nº ${rec.number}`, bodyHtml: body, bare: true });
   }
 
   // ----- calendario -----
@@ -178,7 +212,7 @@ export async function renderApp(root, key, onCountsChanged) {
     const f = fieldsByKey[st.colorField]; const i = (f.options.choices || []).indexOf(r.data[st.colorField]);
     return i < 0 ? '#94a3b8' : PALETTE[i % PALETTE.length];
   }
-  const titleOf = (r) => String(r.data[meta.app.title_field] || `#${r.id}`);
+  const titleOf = (r) => String(r.data[meta.app.title_field] || `Nº ${r.number}`);
   let calRows = [];
   async function loadCalendar() {
     const { days } = monthGrid();
@@ -247,7 +281,7 @@ export async function renderApp(root, key, onCountsChanged) {
   function cellValue(r, c, { reveal = true } = {}) {
     switch (c) {
       case '_center': return r.center_code || r.center_name || '—';
-      case '_id': return '#' + r.id;
+      case '_num': return h('strong.num', String(r.number ?? ''));
       case '_updated_at': return fmtDateTime(r.updated_at);
       case '_created_at': return fmtDateTime(r.created_at);
       case '_updated_by': return r.updated_by_name || '';
@@ -276,6 +310,7 @@ export async function renderApp(root, key, onCountsChanged) {
       case 'decimal': return Number(v).toLocaleString('es-ES', { maximumFractionDigits: 2 });
       case 'iban': return h('span.mono', String(v).replace(/(.{4})/g, '$1 ').trim());
       case 'ip': return h('span.mono', v);
+      case 'signature': return v && (v.signed || v.img) ? h('span.chip.ok', '✍ Firmado') : '';
       default: return String(v);
     }
   }
@@ -305,7 +340,7 @@ export async function renderApp(root, key, onCountsChanged) {
     // tarjetas (móvil)
     const titleKey = meta.app.title_field || (meta.fields[0] && meta.fields[0].key);
     clear(mobileList, st.rows.length ? st.rows.map((r) => h('div.card.rec-card', { class: r.deleted_at ? 'deleted' : '', onclick: () => openRecord(r) },
-      h('div.t', r.deleted_at ? '🗑️' : null, h('span', { style: { flex: 1 } }, String(r.data[titleKey] || `#${r.id}`)), h('span.muted.small', r.center_code || r.center_name || '')),
+      h('div.t', r.deleted_at ? '🗑️' : null, h('span.num', `${r.number}`), h('span', { style: { flex: 1 } }, String(r.data[titleKey] || '')), h('span.muted.small', r.center_code || r.center_name || '')),
       h('div.kv', columns.filter((c) => c !== titleKey && c !== '_center').slice(0, 5).map((c) => [h('span', colDef(c).label), h('span', cellValue(r, c, { reveal: false }) || '—')])),
       r.deleted_at && r.can.restore ? h('div', h('button.btn.sm.ok', { onclick: (e) => { e.stopPropagation(); restoreRec(r); } }, '↩ Restaurar')) : null,
     )) : emptyState());
@@ -419,7 +454,7 @@ export async function renderApp(root, key, onCountsChanged) {
       const idx = Object.fromEntries(uo.map((k, i) => [k, i]));
       for (const g of groups) g.keys = g.keys.map((k, i) => [k, idx[k] ?? 1e6 + i]).sort((a, b) => a[1] - b[1]).map((x) => x[0]);
     }
-    return { groups: groups.filter((g) => g.keys.length), tabs: !!layout.tabs };
+    return { groups: groups.filter((g) => g.keys.length), tabs: !!layout.tabs, labelSize: layout.label_size, inputSize: layout.input_size };
   }
 
   // ----- formulario de registro -----
@@ -437,7 +472,7 @@ export async function renderApp(root, key, onCountsChanged) {
     const fieldEls = {};
     for (const f of meta.fields) fieldEls[f.key] = buildField(f);
     // una rejilla por sección; en modo pestañas, una pestaña por sección con título
-    const { groups, tabs: asTabs } = formGroups();
+    const { groups, tabs: asTabs, labelSize, inputSize } = formGroups();
     const grids = groups.map(() => h('div.form-grid'));
     const drawGrids = (gs) => gs.forEach((g, i) => clear(grids[i], g.keys.map((k) => fieldEls[k])));
     drawGrids(groups);
@@ -469,6 +504,24 @@ export async function renderApp(root, key, onCountsChanged) {
         case 'url': input = h('input', { type: 'url', value: v || '', placeholder: 'https://', disabled: dis });
           extra = v ? h('a.btn.icon', { href: v, target: '_blank', rel: 'noopener', title: 'Abrir' }, '↗') : null; break;
         case 'color': input = h('input', { type: 'color', value: v || '#4f46e5', disabled: dis }); break;
+        case 'signature': {
+          // valor: { img, at } o ''. Se edita con la ventana de firma.
+          let val = v && v.img ? v : null;
+          input = { tagName: 'SIGNATURE', get value() { return val ? val.img : ''; }, changed: false };
+          const box = h('div.sig-field');
+          const meta2 = h('div.sig-meta');
+          const draw = () => {
+            clear(box, val ? h('img', { src: val.img, alt: 'Firma' }) : h('span.muted', 'Sin firmar'));
+            clear(meta2, val && val.at ? h('span', `Firmado el ${fmtDateTime(val.at)}`) : null,
+              !dis ? h('button.btn.sm', { type: 'button', onclick: async () => { const img = await signaturePad(f.label); if (img) { val = { img }; input.changed = true; draw(); } } }, val ? '✍ Volver a firmar' : '✍ Firmar') : null,
+              !dis && val ? h('button.btn.sm.ghost', { type: 'button', onclick: () => { val = null; input.changed = true; draw(); } }, 'Borrar') : null);
+          };
+          draw();
+          extra = null;
+          inputs[f.key] = input;
+          const lbl = h('label', f.label, f.required ? h('span.req', '*') : null);
+          return h('div.field', { class: 'w-' + ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md'), dataset: { key: f.key } }, lbl, box, meta2, f.help ? h('div.help', f.help) : null);
+        }
         case 'ip': input = ipMask(h('input', { type: 'text', value: v || '', disabled: dis })); break;
         case 'iban': input = h('input', { type: 'text', value: v ? String(v).replace(/(.{4})/g, '$1 ').trim() : '', placeholder: 'ES00 0000 0000 0000 0000 0000', autocomplete: 'off', disabled: dis }); break;
         case 'checkbox': input = h('input', { type: 'checkbox', checked: !!v, disabled: dis }); break;
@@ -520,6 +573,7 @@ export async function renderApp(root, key, onCountsChanged) {
       for (const f of meta.fields) {
         const i = inputs[f.key];
         if (f.type === 'password') { if (dirtyPw.has(f.key)) data[f.key] = i.value; continue; }
+        if (f.type === 'signature') { if (i.changed) data[f.key] = i.value; continue; }
         if (f.type === 'checkbox') data[f.key] = i.checked;
         else if (f.type === 'multiselect') data[f.key] = [...i.selectedOptions].map((o) => o.value);
         else data[f.key] = i.value;
@@ -547,13 +601,13 @@ export async function renderApp(root, key, onCountsChanged) {
       await api(`/apps/${key}/layout/form`, { method: 'PUT', body: { reset: true } }).catch(toastErr);
     } }, 'Restablecer');
 
-    const dataPane = h('div',
+    const dataPane = h('div', { style: { ...(labelSize ? { '--lbl-fs': labelSize + 'px' } : {}), ...(inputSize ? { '--inp-fs': inputSize + 'px' } : {}) } },
       rec && rec.deleted_at ? h('div.deleted-banner', `🗑️ Registro en la papelera desde ${fmtDateTime(rec.deleted_at)}${rec.deleted_by_name ? ' por ' + rec.deleted_by_name : ''}.`) : null,
       h('div.form-top',
         meta.centers.length ? h('div.field', h('label', 'Centro de trabajo / coste'), centerSelect) : null,
         h('div.design-tools.desktop-only', designBtn, resetBtn)),
       formBody,
-      rec ? h('div.meta-line', h('span', `#${rec.id}`), h('span', `Creado ${fmtDateTime(rec.created_at)}${rec.created_by_name ? ' por ' + rec.created_by_name : ''}`),
+      rec ? h('div.meta-line', h('span', `Nº ${rec.number}`), h('span', `Creado ${fmtDateTime(rec.created_at)}${rec.created_by_name ? ' por ' + rec.created_by_name : ''}`),
         h('span', `Modificado ${fmtDateTime(rec.updated_at)}${rec.updated_by_name ? ' por ' + rec.updated_by_name : ''}`)) : null);
     const historyPane = h('div', { hidden: true });
 
@@ -569,8 +623,8 @@ export async function renderApp(root, key, onCountsChanged) {
       };
     }
 
-    const title = rec ? String(rec.data[meta.app.title_field] || `#${rec.id}`) : `Nuevo · ${meta.app.name}`;
-    const m = modal({ title: [h('span', meta.app.icon || ''), h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, title)], size: 'lg', tabs, content: [dataPane, historyPane] });
+    const title = rec ? String(rec.data[meta.app.title_field] || meta.app.name) : `Nuevo · ${meta.app.name}`;
+    const m = modal({ title: [h('span', meta.app.icon || ''), rec ? h('span.num-badge', `Nº ${rec.number}`) : null, h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, title)], size: 'lg', tabs, content: [dataPane, historyPane] });
     const footer = [];
     if (rec && rec.deleted_at) {
       if (rec.can.restore) footer.push(h('button.btn.ok', { onclick: () => restoreRec(rec, () => m.close()) }, '↩ Restaurar'));
