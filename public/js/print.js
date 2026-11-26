@@ -53,6 +53,8 @@ const CSS = `
   .box .v { font-size: 10pt; white-space: pre-wrap; word-break: break-word; min-height: 12pt; }
   .box .v.empty { color: #c0c4cc; }
   .s2 { grid-column: span 2; } .s3 { grid-column: span 3; } .s4 { grid-column: span 4; } .s6 { grid-column: span 6; } .s8 { grid-column: span 8; } .s12 { grid-column: span 12; }
+  .pics { display: grid; grid-template-columns: repeat(auto-fill, minmax(38mm, 1fr)); gap: 4px; margin-top: 3px; }
+  .pics img { width: 100%; max-height: 60mm; object-fit: contain; border: 1px solid #e5e7eb; border-radius: 3px; background: #fafafa; }
   .sigs { display: grid; grid-template-columns: repeat(auto-fit, minmax(55mm, 1fr)); gap: 10px; margin-top: 14px; page-break-inside: avoid; }
   .sig { border: 1px solid #c9ced6; border-radius: 4px; padding: 4px 8px 6px; }
   .sig .l { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; }

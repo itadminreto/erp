@@ -333,8 +333,11 @@ export async function renderAppsAdmin(root, onChange) {
     const help = h('input', { value: f ? f.help || '' : '' });
     const cb = (v) => h('input', { type: 'checkbox', checked: !!v });
     const required = cb(f && f.required), unique = cb(f && f.unique_value), inList = cb(f ? f.show_in_list : true), active = cb(f ? f.active : true);
+    const multiple = cb(f && f.options && f.options.multiple);
+    const multipleLbl = h('label.check', multiple, 'Permitir varias imágenes (hasta 20)');
     const sync = () => {
       choicesField.hidden = !['select', 'multiselect'].includes(type.value);
+      multipleLbl.hidden = type.value !== 'image';
       maxLenField.hidden = !['text', 'textarea', 'email', 'phone', 'url', 'password'].includes(type.value);
     };
     type.onchange = sync; sync();
@@ -342,9 +345,9 @@ export async function renderAppsAdmin(root, onChange) {
       title: f ? `Campo · ${f.label}` : `Nuevo campo en ${target.name}`, size: 'sm',
       content: h('div.stack', h('div.field', h('label', 'Etiqueta *'), label), h('div.field', h('label', 'Clave interna'), key),
         h('div.field', h('label', 'Tipo'), type), choicesField, h('div.field', h('label', 'Ancho en el formulario'), width, h('div.help', 'Proporción de la fila en pantallas anchas; en el móvil se ajusta solo.')), maxLenField, h('div.field', h('label', 'Texto de ayuda'), help),
-        h('div.stack', { style: { gap: '8px' } }, h('label.check', required, 'Obligatorio'), h('label.check', unique, 'Valor único (no se permiten duplicados)'), h('label.check', inList, 'Mostrar en el listado por defecto'), f ? h('label.check', active, 'Activo') : null)),
+        h('div.stack', { style: { gap: '8px' } }, h('label.check', required, 'Obligatorio'), h('label.check', unique, 'Valor único (no se permiten duplicados)'), h('label.check', inList, 'Mostrar en el listado por defecto'), multipleLbl, f ? h('label.check', active, 'Activo') : null)),
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
-        const body = { label: label.value, type: type.value, width: widthVal, max_length: maxLenField.hidden ? '' : maxLen.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value };
+        const body = { label: label.value, type: type.value, width: widthVal, max_length: maxLenField.hidden ? '' : maxLen.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value, ...(type.value === 'image' ? { multiple: multiple.checked } : {}) };
         if (f) body.active = active.checked; else if (key.value) body.key = key.value;
         try { if (f) await target.update(f, body); else await target.create(body); toast('Campo guardado', 'ok'); m.close(); reload(); } catch (e) { toastErr(e); }
       } }, 'Guardar')],
@@ -476,10 +479,10 @@ export async function renderAudit(root) {
 
 // ---------- diseñador visual de formularios ----------
 const DZ_WIDTHS = [['xs', 'Muy estrecho', 2], ['sm', 'Estrecho', 3], ['md', 'Medio', 4], ['lg', 'Ancho', 6], ['xl', 'Muy ancho', 8], ['full', 'Fila completa', 12]];
-const DZ_TALL = ['textarea', 'multiselect'];
+const DZ_TALL = ['textarea', 'multiselect', 'image'];
 const DZ_TYPE_HINT = { text: 'Texto', textarea: 'Texto largo…', number: '123', decimal: '1,50', date: 'dd/mm/aaaa', datetime: 'dd/mm/aaaa hh:mm', email: 'nombre@dominio.com',
   phone: '600 000 000', url: 'https://', select: 'Elegir… ▾', multiselect: 'Elegir varios… ▾', checkbox: '☐ Sí', password: '••••••••  👁 🎲', user: 'Usuario… ▾',
-  color: '■', iban: 'ES00 0000 0000 0000 0000 0000', ip: '192.168.1.10', signature: '✍ Firma en pantalla' };
+  color: '■', iban: 'ES00 0000 0000 0000 0000 0000', ip: '192.168.1.10', signature: '✍ Firma en pantalla', image: '🖼 📷 Imágenes / fotos' };
 
 export async function renderFormDesigner(root, appId) {
   const [apps, types] = await Promise.all([api('/admin/apps'), api('/admin/field-types')]);

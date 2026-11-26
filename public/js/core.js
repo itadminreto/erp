@@ -276,3 +276,66 @@ export function signaturePad(title = 'Firmar') {
     }
   });
 }
+
+/**
+ * Prepara una imagen elegida o hecha con la cámara: la reduce a máx. 1600 px y la comprime en JPEG.
+ * Los PNG pequeños (p. ej. firmas escaneadas con fondo transparente) se mantienen en PNG.
+ * Devuelve { data (data URL), name, w, h }.
+ */
+export async function prepareImage(file, maxSide = 1600) {
+  if (!/^image\//.test(file.type)) throw new Error(`«${file.name}» no es una imagen`);
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error(`No se puede leer «${file.name}»`)); i.src = url; });
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * scale), hgt = Math.round(img.naturalHeight * scale);
+    const keepPng = file.type === 'image/png' && file.size < 1024 * 1024;
+    const c = document.createElement('canvas'); c.width = w; c.height = hgt;
+    const ctx = c.getContext('2d');
+    if (!keepPng) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, hgt); } // JPEG no admite transparencia
+    ctx.drawImage(img, 0, 0, w, hgt);
+    const data = keepPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.82);
+    return { data, name: file.name || 'foto.jpg', w, h: hgt };
+  } finally { URL.revokeObjectURL(url); }
+}
+
+/** Visor de imágenes a pantalla completa con flechas para pasar entre ellas. */
+export function imageViewer(urls, start = 0) {
+  let i = start;
+  const img = h('img.viewer-img', { alt: '' });
+  const count = h('span.muted.small');
+  const show = () => { img.src = urls[i]; count.textContent = urls.length > 1 ? `${i + 1} / ${urls.length}` : ''; };
+  const m = modal({
+    title: 'Imagen', size: 'lg',
+    content: h('div.viewer', img),
+    footer: [count, h('div.spacer'),
+      urls.length > 1 ? h('button.btn', { onclick: () => { i = (i - 1 + urls.length) % urls.length; show(); } }, '‹ Anterior') : null,
+      urls.length > 1 ? h('button.btn', { onclick: () => { i = (i + 1) % urls.length; show(); } }, 'Siguiente ›') : null,
+      h('a.btn', { href: urls[start], target: '_blank', rel: 'noopener', onclick: (e) => { e.currentTarget.href = urls[i]; } }, '↗ Abrir'),
+      h('button.btn.primary', { onclick: () => m.close() }, 'Cerrar')],
+  });
+  show();
+}
+
+/** Foto con la webcam del ordenador (necesita HTTPS). Devuelve un File JPEG o null. */
+export function webcamPhoto() {
+  return new Promise((resolve) => {
+    let stream = null, result = null;
+    const video = h('video.viewer-img', { autoplay: true, playsinline: true, muted: true });
+    const m = modal({
+      title: '📷 Hacer foto', size: 'lg', content: h('div.viewer', video),
+      footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
+        h('button.btn.primary', { onclick: () => {
+          const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+          c.getContext('2d').drawImage(video, 0, 0);
+          c.toBlob((b) => { result = new File([b], `foto_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jpg`, { type: 'image/jpeg' }); m.close(); }, 'image/jpeg', 0.9);
+        } }, '📸 Capturar')],
+      onClose: () => { if (stream) stream.getTracks().forEach((t) => t.stop()); resolve(result); },
+    });
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      .then((s) => { stream = s; video.srcObject = s; })
+      .catch(() => { toast('No se puede acceder a la cámara', 'error'); m.close(); });
+  });
+}
+export const canUseWebcam = () => !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+  && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);

@@ -6,7 +6,7 @@ const FIELD_TYPES = {
   text: 'Texto', textarea: 'Texto largo', number: 'Número entero', decimal: 'Número decimal',
   date: 'Fecha', datetime: 'Fecha y hora', email: 'Email', phone: 'Teléfono', url: 'URL',
   select: 'Lista desplegable', multiselect: 'Selección múltiple', checkbox: 'Sí / No',
-  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)', ip: 'Dirección IP', signature: 'Firma (en pantalla)',
+  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)', ip: 'Dirección IP', signature: 'Firma (en pantalla)', image: 'Imagen / foto',
 };
 
 function parseField(f) {
@@ -166,6 +166,7 @@ function toText(field, v, usersById = {}) {
     case 'user': return usersById[v] ? usersById[v].name : String(v);
     case 'iban': return fmtIban(v);
     case 'signature': return v && v.img ? `Firmado ${String(v.at || '').slice(0, 10)}` : '';
+    case 'image': return Array.isArray(v) && v.length ? `${v.length} imagen${v.length > 1 ? 'es' : ''}` : '';
     default: return v;
   }
 }

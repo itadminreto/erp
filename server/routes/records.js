@@ -62,6 +62,7 @@ function serialize(req, r, full = true) {
     const v = data[f.key];
     if (f.type === 'password') out[f.key] = v ? MASK : '';
     else if (f.type === 'signature') out[f.key] = v && v.img ? (full ? v : { signed: true, at: v.at }) : '';
+    else if (f.type === 'image') out[f.key] = Array.isArray(v) ? (full ? v : { count: v.length }) : [];
     else out[f.key] = v ?? '';
   }
   const g = req.grants, u = req.user;
@@ -93,6 +94,24 @@ function buildData(req, input, existing, ctx) {
       if (v === MASK) continue; // sin cambios
       if (v && f.max_length && String(v).length > f.max_length) { errors.push(`${f.label}: máximo ${f.max_length} caracteres`); continue; }
       data[f.key] = v ? encrypt(String(v)) : '';
+      continue;
+    }
+    if (f.type === 'image') {
+      // lista de { id } (ya guardadas) o { data, name } (nuevas, se guardan tras grabar el registro)
+      const prev = Array.isArray(existing && existing[f.key]) ? existing[f.key] : [];
+      const items = Array.isArray(v) ? v : [];
+      const max = f.options.multiple ? 20 : 1;
+      if (items.length > max) { errors.push(`${f.label}: máximo ${max} imagen${max > 1 ? 'es' : ''}`); continue; }
+      const out = [];
+      for (const it of items) {
+        if (it && it.id) { const old = prev.find((x) => x.id === Number(it.id)); if (old) out.push(old); continue; }
+        const m = it && typeof it.data === 'string' && it.data.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
+        if (!m) { errors.push(`${f.label}: imagen no válida (JPG, PNG o WebP)`); continue; }
+        const size = Math.floor(m[2].length * 3 / 4);
+        if (size > 4 * 1024 * 1024) { errors.push(`${f.label}: imagen demasiado grande (máx. 4 MB)`); continue; }
+        out.push({ pending: true, mime: m[1], b64: m[2], size, name: String(it.name || 'imagen').slice(0, 200), w: Number(it.w) || null, h: Number(it.h) || null });
+      }
+      data[f.key] = out;
       continue;
     }
     if (f.type === 'signature') {
@@ -146,7 +165,13 @@ const pwKeysOf = (req) => req.fields.filter((f) => f.type === 'password').map((f
 /** Vista de los datos para la auditoría: las firmas se registran como «Firmado (fecha)», no la imagen. */
 const auditView = (req, data) => {
   const out = { ...data };
-  for (const f of req.fields) if (f.type === 'signature') out[f.key] = data[f.key] && data[f.key].img ? `Firmado (${data[f.key].at})` : '';
+  for (const f of req.fields) {
+    if (f.type === 'signature') out[f.key] = data[f.key] && data[f.key].img ? `Firmado (${data[f.key].at})` : '';
+    if (f.type === 'image') {
+      const l = Array.isArray(data[f.key]) ? data[f.key] : [];
+      out[f.key] = l.length ? `${l.length} imagen${l.length > 1 ? 'es' : ''} (${l.map((x) => (x.pending ? 'nueva' : x.id)).join(', ')})` : '';
+    }
+  }
   return out;
 };
 
@@ -267,10 +292,38 @@ router.get('/:appKey/records', wrap(async (req, res) => {
 router.get('/:appKey/records/:id', wrap(async (req, res) => res.json(serialize(req, await getRecord(req, req.params.id)))));
 
 // ---------- alta / modificación ----------
+/**
+ * Guarda en record_files las imágenes nuevas del registro, borra las que ya no están y deja en el JSON solo
+ * las referencias { id, name, w, h, at }. Devuelve los datos finales.
+ */
+async function storeImages(req, recId, data) {
+  const imgFields = req.fields.filter((f) => f.type === 'image');
+  if (!imgFields.length) return data;
+  let changed = false;
+  for (const f of imgFields) {
+    const list = Array.isArray(data[f.key]) ? data[f.key] : [];
+    const out = [];
+    for (const it of list) {
+      if (!it.pending) { out.push(it); continue; }
+      const id = Number((await run(`INSERT INTO record_files (record_id, field_key, name, mime, size, width, height, data, created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
+        recId, f.key, it.name, it.mime, it.size, it.w, it.h, it.b64, req.user.id)).lastInsertRowid);
+      out.push({ id, name: it.name, mime: it.mime, w: it.w, h: it.h, at: new Date().toISOString() });
+      changed = true;
+    }
+    data[f.key] = out;
+    const keep = out.map((x) => x.id);
+    const del = await run(`DELETE FROM record_files WHERE record_id = ? AND field_key = ?${keep.length ? ` AND id NOT IN (${keep.map(() => '?').join(',')})` : ''}`, recId, f.key, ...keep);
+    if (del.changes) changed = true;
+  }
+  if (changed) await run('UPDATE records SET data = ? WHERE id = ?', JSON.stringify(data), recId);
+  return data;
+}
+
 async function insertRecord(req, centerId, data, summaryText) {
   const number = await nextNumber(req.appDef.id, req.companyId);
   const id = Number((await run(`INSERT INTO records (app_id, company_id, number, center_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
     req.appDef.id, req.companyId, number, centerId, JSON.stringify(data), req.user.id, req.user.id)).lastInsertRowid);
+  await storeImages(req, id, data);
   await audit(req, { entity: 'record', entityId: id, action: 'create', appId: req.appDef.id, companyId: req.companyId,
     summary: `${summaryText} · Nº ${number}`, changes: diff({}, { ...auditView(req, data), _centro: centerId }, pwKeysOf(req)) });
   return id;
@@ -280,6 +333,7 @@ async function updateRecord(req, rec, centerId, data, summaryText) {
   if (!changes.length) return false;
   await run(`UPDATE records SET data = ?, center_id = ?, updated_by = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?`,
     JSON.stringify(data), centerId, req.user.id, rec.id);
+  await storeImages(req, rec.id, data);
   await audit(req, { entity: 'record', entityId: rec.id, action: 'update', appId: req.appDef.id, companyId: req.companyId,
     summary: summaryText || `Modificación (${changes.length} campo/s)`, changes });
   return true;
@@ -351,6 +405,16 @@ router.post('/:appKey/bulk', wrap(async (req, res) => {
     try { const r = await getRecord(req, id); await tx(() => fn(req, r)); ok++; } catch (e) { errors.push(`#${id}: ${e.message}`); }
   }
   res.json({ ok, errors });
+}));
+
+// ---------- imágenes ----------
+router.get('/:appKey/records/:id/files/:fid', wrap(async (req, res) => {
+  const rec = await getRecord(req, req.params.id); // comprueba permisos sobre el registro
+  const f = await get('SELECT mime, data FROM record_files WHERE id = ? AND record_id = ?', Number(req.params.fid), rec.id);
+  if (!f) throw httpError(404, 'Imagen no encontrada');
+  res.setHeader('Content-Type', f.mime);
+  res.setHeader('Cache-Control', 'private, max-age=86400'); // el id de una imagen no cambia de contenido
+  res.send(Buffer.from(f.data, 'base64'));
 }));
 
 // ---------- historial ----------
@@ -501,7 +565,7 @@ router.post('/:appKey/import/preview', upload.single('file'), wrap(async (req, r
   const header = matrix[0].map((h) => String(h).trim());
   const rows = matrix.slice(1);
   const targets = [{ key: '_id', label: 'Nº (actualizar existente)' }, { key: '_center', label: 'Centro (código o nombre)' },
-    ...req.fields.filter((f) => f.type !== 'signature').map((f) => ({ key: f.key, label: f.label, type: f.type }))];
+    ...req.fields.filter((f) => !['signature', 'image'].includes(f.type)).map((f) => ({ key: f.key, label: f.label, type: f.type }))];
   const mapping = header.map((h) => {
     const n = norm(h);
     if (['id', 'n', 'no', 'numero', 'num', 'nparte', 'numerodetrabajo', 'ntrabajo'].includes(n)) return '_id';

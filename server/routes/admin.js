@@ -384,7 +384,7 @@ router.put('/apps-order', wrap(async (req, res) => {
 }));
 
 const WIDTHS = ['xs', 'sm', 'md', 'lg', 'xl', 'full'];
-const TALL_TYPES = ['textarea', 'multiselect']; // tipos que admiten altura (más líneas / opciones visibles)
+const TALL_TYPES = ['textarea', 'multiselect', 'image']; // tipos que admiten altura (más líneas / opciones visibles)
 function fieldData(b, isNew) {
   const d = pick(b, ['label', 'type', 'required', 'unique_value', 'show_in_list', 'width', 'help', 'active', 'max_length', 'height']);
   if ((isNew || 'label' in d) && !String(d.label || '').trim()) throw httpError(400, 'La etiqueta es obligatoria');
@@ -398,9 +398,9 @@ function fieldData(b, isNew) {
     else if (!Number.isInteger(n) || n < 1 || n > 65000) throw httpError(400, 'Máximo de caracteres: número entre 1 y 65000');
     else d.max_length = n;
   }
-  if ('choices' in b) {
-    const choices = (Array.isArray(b.choices) ? b.choices : String(b.choices).split('\n')).map((s) => String(s).trim()).filter(Boolean);
-    d.options = JSON.stringify({ choices });
+  if ('choices' in b || 'multiple' in b) {
+    const choices = (Array.isArray(b.choices) ? b.choices : String(b.choices || '').split('\n')).map((s) => String(s).trim()).filter(Boolean);
+    d.options = JSON.stringify({ choices, ...('multiple' in b ? { multiple: bool(b.multiple) === 1 } : {}) });
   }
   return d;
 }

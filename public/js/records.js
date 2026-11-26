@@ -1,7 +1,7 @@
 // Vista de una aplicación: listado, formulario dinámico, papelera, historial, importación/exportación y envío de contraseñas.
 import {
   api, h, clear, toast, toastErr, modal, confirmDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
-  genPassword, copy, sortable, ACTION_LABELS, state, ipMask, signaturePad,
+  genPassword, copy, sortable, ACTION_LABELS, state, ipMask, signaturePad, prepareImage, imageViewer, webcamPhoto, canUseWebcam,
 } from './core.js';
 import { printDoc, esc } from './print.js';
 
@@ -111,6 +111,7 @@ export async function renderApp(root, key, onCountsChanged) {
     const f = fieldsByKey[c];
     if (f && f.type === 'password') return r.data[c] ? '••••••' : '';
     if (f && f.type === 'signature') return r.data[c] && (r.data[c].signed || r.data[c].img) ? `Firmado ${fmtDateTime(r.data[c].at)}` : '';
+    if (f && f.type === 'image') { const n = Array.isArray(r.data[c]) ? r.data[c].length : (r.data[c] && r.data[c].count) || 0; return n ? `${n} imagen${n > 1 ? 'es' : ''}` : ''; }
     if (f && f.type === 'select') return r.data[c] || '';
     if (f && f.type === 'url') return r.data[c] || '';
     if (f && f.type === 'textarea') return r.data[c] || '';
@@ -165,6 +166,13 @@ export async function renderApp(root, key, onCountsChanged) {
       for (const k of keys) {
         const f = fieldsByKey[k];
         const span = f.type === 'textarea' && !SPAN[f.width] ? 12 : (SPAN[f.width] || 4);
+        if (f.type === 'image') {
+          const imgs = Array.isArray(rec.data[k]) ? rec.data[k] : [];
+          inner += `<div class="box s${span}"><div class="l">${esc(f.label)}</div>${imgs.length
+            ? `<div class="pics">${imgs.map((x) => `<img src="/api/apps/${esc(key)}/records/${rec.id}/files/${x.id}" alt="">`).join('')}</div>`
+            : '<div class="v empty">—</div>'}</div>`;
+          continue;
+        }
         inner += box(f.label, cellText(rec, k), span, ['textarea', 'multiselect'].includes(f.type) ? (f.height || 1) + (f.type === 'textarea' ? 1 : 0) : 1);
       }
       if (inner) html += `<div class="sec">${g.title ? `<div class="sec-h">${esc(g.title)}</div>` : ''}<div class="grid">${inner}</div></div>`;
@@ -311,6 +319,7 @@ export async function renderApp(root, key, onCountsChanged) {
       case 'iban': return h('span.mono', String(v).replace(/(.{4})/g, '$1 ').trim());
       case 'ip': return h('span.mono', v);
       case 'signature': return v && (v.signed || v.img) ? h('span.chip.ok', '✍ Firmado') : '';
+      case 'image': { const n = Array.isArray(v) ? v.length : (v && v.count) || 0; return n ? h('span.chip', `🖼 ${n}`) : ''; }
       default: return String(v);
     }
   }
@@ -504,6 +513,46 @@ export async function renderApp(root, key, onCountsChanged) {
         case 'url': input = h('input', { type: 'url', value: v || '', placeholder: 'https://', disabled: dis });
           extra = v ? h('a.btn.icon', { href: v, target: '_blank', rel: 'noopener', title: 'Abrir' }, '↗') : null; break;
         case 'color': input = h('input', { type: 'color', value: v || '#4f46e5', disabled: dis }); break;
+        case 'image': {
+          // lista de imágenes: guardadas { id, name } o nuevas { data, name } (se suben al guardar)
+          const multiple = !!f.options.multiple;
+          let list = Array.isArray(v) ? v.map((x) => ({ ...x })) : [];
+          input = { tagName: 'IMAGES', changed: false, get value() { return list.map((x) => (x.id ? { id: x.id } : { data: x.data, name: x.name, w: x.w, h: x.h })); } };
+          const urlOf = (x) => (x.id ? `/api/apps/${key}/records/${rec.id}/files/${x.id}` : x.data);
+          const thumbs = h('div.img-thumbs');
+          const add = async (files) => {
+            for (const file of files) {
+              if (!multiple && list.length) list = [];
+              if (list.length >= (multiple ? 20 : 1)) { toast('Máximo de imágenes alcanzado', 'error'); break; }
+              try { list.push(await prepareImage(file)); input.changed = true; } catch (e) { toastErr(e); }
+            }
+            draw();
+          };
+          const pick = (camera) => {
+            const inp = h('input', { type: 'file', accept: 'image/*', multiple: multiple && !camera, capture: camera ? 'environment' : undefined, hidden: true,
+              onchange: () => { add([...inp.files]); inp.remove(); } });
+            document.body.append(inp); inp.click();
+          };
+          const takePhoto = async () => {
+            if (canUseWebcam()) { const file = await webcamPhoto(); if (file) add([file]); } else pick(true); // móvil/tableta: cámara del dispositivo
+          };
+          const draw = () => {
+            thumbs.classList.toggle('empty', !list.length);
+            clear(thumbs, list.length ? list.map((x, i) => h('div.img-thumb', { class: (x.id ? '' : 'new') + ((x.mime || (x.data || '').slice(5, 14)) === 'image/png' ? ' fit' : ''), title: x.name || '', onclick: () => imageViewer(list.map(urlOf), i) },
+              h('img', { src: urlOf(x), alt: x.name || '', loading: 'lazy' }),
+              !dis ? h('button.x', { type: 'button', title: 'Quitar', onclick: (e) => { e.stopPropagation(); list.splice(i, 1); input.changed = true; draw(); } }, '✕') : null))
+              : 'Sin imágenes');
+          };
+          draw();
+          inputs[f.key] = input;
+          const hgt = f.height || 1;
+          return h('div.field', { class: 'w-' + ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md') + (hgt > 1 ? ' tall' : ''), dataset: { key: f.key }, style: hgt > 1 ? { gridRow: `span ${hgt}` } : {} },
+            h('label', f.label, f.required ? h('span.req', '*') : null),
+            h('div.img-field', thumbs, !dis ? h('div.img-actions',
+              h('button.btn.sm', { type: 'button', onclick: takePhoto }, '📷 Hacer foto'),
+              h('button.btn.sm', { type: 'button', onclick: () => pick(false) }, multiple ? '🖼 Subir imágenes' : '🖼 Subir imagen')) : null),
+            f.help ? h('div.help', f.help) : null);
+        }
         case 'signature': {
           // valor: { img, at } o ''. Se edita con la ventana de firma.
           let val = v && v.img ? v : null;
@@ -573,7 +622,7 @@ export async function renderApp(root, key, onCountsChanged) {
       for (const f of meta.fields) {
         const i = inputs[f.key];
         if (f.type === 'password') { if (dirtyPw.has(f.key)) data[f.key] = i.value; continue; }
-        if (f.type === 'signature') { if (i.changed) data[f.key] = i.value; continue; }
+        if (f.type === 'signature' || f.type === 'image') { if (i.changed) data[f.key] = i.value; continue; }
         if (f.type === 'checkbox') data[f.key] = i.checked;
         else if (f.type === 'multiselect') data[f.key] = [...i.selectedOptions].map((o) => o.value);
         else data[f.key] = i.value;

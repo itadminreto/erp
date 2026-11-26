@@ -15,7 +15,7 @@ const app = express();
 // Detrás de Nginx/Apache en la misma máquina: solo se confía en la cabecera X-Forwarded-For del proxy local.
 app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 'loopback' : false);
 app.disable('x-powered-by');
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '80mb' })); // admite varias fotos en un mismo guardado
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');

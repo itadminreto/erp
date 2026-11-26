@@ -423,3 +423,34 @@ test('campo Firma: se guarda la imagen y la fecha, no se reenvía en listados ni
   assert.ok(!JSON.stringify(hist.body).includes('base64'), 'la auditoría no guarda la imagen');
   assert.equal((await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'X', firma_del_cliente: 'data:text/html,<b>' } })).status, 400);
 });
+
+test('campo Imagen: varias fotos, se sirven con permisos, se quitan y se borran con el registro', async () => {
+  const veh = (await admin.call('GET', '/admin/apps')).body.find((x) => x.key === 'vehiculos');
+  const f = await admin.call('POST', `/admin/apps/${veh.id}/fields`, { label: 'Fotos', type: 'image', multiple: true });
+  assert.equal(f.status, 201);
+  const fld = (await admin.call('GET', '/admin/apps')).body.find((x) => x.key === 'vehiculos').fields.find((x) => x.key === 'fotos');
+  assert.equal(fld.options.multiple, true);
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const r = await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'FOTO-1', fotos: [{ data: png, name: 'a.png' }, { data: png, name: 'b.png' }] } });
+  assert.equal(r.status, 201);
+  const imgs = r.body.data.fotos; assert.equal(imgs.length, 2); assert.ok(imgs[0].id && !imgs[0].b64);
+  const file = await admin.call('GET', `/apps/vehiculos/records/${r.body.id}/files/${imgs[0].id}`);
+  assert.equal(file.status, 200); assert.equal(file.body.subarray(1, 4).toString(), 'PNG');
+  const list = await admin.call('GET', `/apps/vehiculos/records?q=FOTO-1`);
+  assert.deepEqual(list.body.rows[0].data.fotos, { count: 2 }, 'el listado no lleva las imágenes');
+  // el usuario del otro centro no puede verlas
+  const ana = client(); await ana.login('ana@test.com', 'anapass123');
+  await admin.call('PUT', `/apps/vehiculos/records/${r.body.id}`, { center_id: ids.c2 });
+  assert.equal((await ana.call('GET', `/apps/vehiculos/records/${r.body.id}/files/${imgs[0].id}`)).status, 403);
+  // quitar una imagen la borra
+  const u = await admin.call('PUT', `/apps/vehiculos/records/${r.body.id}`, { data: { fotos: [{ id: imgs[1].id }] } });
+  assert.deepEqual(u.body.data.fotos.map((x) => x.id), [imgs[1].id]);
+  assert.equal((await admin.call('GET', `/apps/vehiculos/records/${r.body.id}/files/${imgs[0].id}`)).status, 404);
+  assert.equal((await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'FOTO-2', fotos: [{ data: 'data:text/html;base64,PGI+' }] } })).status, 400);
+  const h = await admin.call('GET', `/apps/vehiculos/records/${r.body.id}/history`);
+  assert.ok(!JSON.stringify(h.body).includes('iVBOR'), 'la auditoría no guarda la imagen');
+  await admin.call('DELETE', `/apps/vehiculos/records/${r.body.id}`);
+  await admin.call('DELETE', `/apps/vehiculos/records/${r.body.id}/purge`);
+  const { get } = db; assert.equal((await get('SELECT COUNT(*) n FROM record_files WHERE record_id = ?', r.body.id)).n, 0);
+  await admin.call('PUT', `/admin/fields/${fld.id}`, { active: false });
+});

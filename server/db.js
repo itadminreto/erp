@@ -275,6 +275,17 @@ async function init() {
     app_id INT NOT NULL, company_id INT NOT NULL, next_number INT NOT NULL,
     PRIMARY KEY (app_id, company_id)) ENGINE=InnoDB`);
   await assignMissingNumbers();
+  // Imágenes y fotos de los campos «Imagen» (fuera del JSON del registro para que los listados sigan siendo ligeros)
+  await pool.query(`CREATE TABLE IF NOT EXISTS record_files (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    record_id INT NOT NULL,
+    field_key VARCHAR(50) NOT NULL,
+    name VARCHAR(200), mime VARCHAR(40) NOT NULL, size INT NOT NULL, width INT, height INT,
+    data LONGTEXT NOT NULL,                 -- base64
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, created_by INT NULL,
+    KEY idx_files_record (record_id),
+    CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
   // «IP fija» de Fibras pasa al nuevo tipo «Dirección IP» (una sola vez)
   const ipDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_ip_type_v1'");
   if (!ipDone.length) {
@@ -344,7 +355,7 @@ async function nextNumber(appId, companyId) {
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
 const BACKUP_TABLES = ['companies', 'centers', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
-  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields'];
+  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files'];
 
 const close = () => pool.end();
 

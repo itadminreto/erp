@@ -362,3 +362,16 @@ input.invalid { border-color: var(--danger); outline-color: color-mix(in srgb, v
 .fs-val { min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; font-size: .85rem; }
 .dz-field > label { font-size: var(--lbl-fs, .78rem); }
 .sig-meta > span:first-child { flex-basis: 100%; }
+
+/* ---------- campo Imagen / foto ---------- */
+.img-field { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.img-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-height: 96px; background: var(--surface-2); align-content: start; flex: 1; }
+.img-thumbs.empty { display: grid; place-items: center; color: var(--muted); font-size: .85rem; }
+.img-thumb { position: relative; aspect-ratio: 1; border-radius: 7px; overflow: hidden; background: #fff; border: 1px solid var(--border); cursor: zoom-in; }
+.img-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.img-thumb.new::after { content: "nueva"; position: absolute; left: 4px; bottom: 4px; font-size: .65rem; background: var(--primary); color: var(--primary-text); padding: 1px 5px; border-radius: 4px; }
+.img-thumb .x { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(17,24,39,.7); color: #fff; cursor: pointer; font-size: 12px; line-height: 22px; padding: 0; }
+.img-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.viewer { display: grid; place-items: center; background: #111827; border-radius: 10px; min-height: 50vh; }
+.viewer-img { max-width: 100%; max-height: 72vh; object-fit: contain; }
+.img-thumb.fit img { object-fit: contain; padding: 4px; } /* PNG (firmas, logos): se muestran enteras */

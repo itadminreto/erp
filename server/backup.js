@@ -98,7 +98,7 @@ async function restoreBackup(buf, { force = false } = {}) {
     try {
       for (const t of BACKUP_TABLES) {
         const rows = doc.tables[t];
-        if (!Array.isArray(rows)) continue;
+        if (!Array.isArray(rows)) { if (t === 'record_files') await run('DELETE FROM record_files'); continue; } // copia sin imágenes
         const cols = new Set((await all(`SHOW COLUMNS FROM \`${t}\``)).map((c) => c.Field));
         await run(`DELETE FROM \`${t}\``);
         // Inserciones por lotes de hasta ~4 MB (para no superar max_allowed_packet)
