@@ -121,17 +121,20 @@ export async function renderCenters(root) {
 }
 
 export async function renderWorkGroups(root) {
-  const centers = await api('/admin/centers');
+  const [centers, users] = await Promise.all([api('/admin/centers'), api('/admin/users')]);
   return simpleEntity(root, {
-    title: 'Grupos de trabajo', sub: 'Cada sede (centro) tiene sus grupos de trabajo. Los campos adicionales se añaden en Apps y campos → Datos maestros → Grupos de trabajo.',
+    title: 'Grupos de trabajo', sub: 'Cada sede (centro) tiene sus grupos para asignarles trabajos (campo «Grupo de trabajo» de las apps). Campos adicionales: Apps y campos → Datos maestros.',
     path: 'work_groups', newLabel: 'Nuevo grupo', entity: 'work_groups',
     columns: [{ key: 'company_name', label: 'Empresa' }, { label: 'Sede', render: (r) => `${r.center_code ? r.center_code + ' · ' : ''}${r.center_name}` },
       { key: 'code', label: 'Código' }, { key: 'name', label: 'Nombre' },
+      { label: 'Miembros', render: (r) => h('span', { style: { whiteSpace: 'normal' } }, (r.member_names || []).join(', ') || h('span.muted', 'Sin miembros')) },
       { label: 'Estado', render: (r) => h('span.chip', { class: r.active ? 'ok' : '' }, r.active ? 'Activo' : 'Inactivo') }],
     form: [
       { key: 'center_id', label: 'Sede (centro) *', type: 'select', value: centers[0] && centers[0].id,
         options: centers.map((c) => ({ value: c.id, label: `${c.company_name} › ${c.code ? c.code + ' · ' : ''}${c.name}` })) },
       { key: 'code', label: 'Código', placeholder: 'G01' }, { key: 'name', label: 'Nombre *' },
+      { key: 'members', label: 'Miembros', type: 'multiselect', value: [], options: users.filter((u) => u.active).map((u) => ({ value: u.id, label: u.name })),
+        help: 'Ctrl+clic para marcar varios. Los miembros ven los trabajos asignados al grupo en «Míos».' },
       { key: 'notes', label: 'Notas', type: 'textarea' }, { key: 'active', label: 'Activo', type: 'checkbox', value: true }],
   });
 }
@@ -326,7 +329,7 @@ export async function renderAppsAdmin(root, onChange) {
     if (!v.key) v.key = v.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     try { const r = await api('/admin/apps', { method: 'POST', body: v }); current = r.id; toast('Aplicación creada. Recuerda darle permisos en Roles.', 'ok'); reload(); } catch (e) { toastErr(e); }
   }
-  const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban'];
+  const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban', 'group'];
   const voiceList = (a) => { try { return JSON.parse(a.voice_fields || '[]'); } catch { return []; } };
   async function editApp(a) {
     const v = await promptDlg(`Propiedades · ${a.name}`, [

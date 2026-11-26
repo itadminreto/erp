@@ -26,6 +26,37 @@ function jv(key, alias = 'r') {
 
 const activeUsers = () => all('SELECT id, name, email, phone FROM users WHERE deleted_at IS NULL ORDER BY name');
 /** Usuarios que se ofrecen en los desplegables: solo los de la empresa activa (y uno mismo). */
+/** Grupos de trabajo de la empresa (de cualquier sede, no borrados). */
+const companyGroups = (companyId) => all(`SELECT g.id, g.code, g.name, g.center_id, g.active FROM work_groups g
+  JOIN centers c ON c.id = g.center_id WHERE c.company_id = ? AND g.deleted_at IS NULL ORDER BY g.name`, companyId);
+const groupsMap = async (companyId) => Object.fromEntries((await companyGroups(companyId)).map((g) => [g.id, g]));
+/** Grupos de trabajo a los que pertenece el usuario. */
+const myGroupIds = async (userId) => (await all('SELECT group_id FROM work_group_members WHERE user_id = ?', userId)).map((x) => x.group_id);
+/**
+ * Condición SQL de «míos»: el campo responsable soy yo o el trabajo está asignado a uno de mis grupos.
+ * Devuelve null si la app no tiene ni responsable ni campos de grupo.
+ */
+async function mineCondition(appDef, fields, user) {
+  const parts = [], params = [];
+  if (appDef.owner_field && fields.some((f) => f.key === appDef.owner_field)) { parts.push(`${jv(appDef.owner_field)} = ?`); params.push(String(user.id)); }
+  const gf = fields.filter((f) => f.type === 'group');
+  if (gf.length) {
+    const mine = await myGroupIds(user.id);
+    if (mine.length) for (const f of gf) { parts.push(`${jv(f.key)} IN (${mine.map(() => '?').join(',')})`); params.push(...mine.map(String)); }
+  }
+  if (!parts.length) return appDef.owner_field || gf.length ? { sql: '0', params: [] } : null;
+  return { sql: `(${parts.join(' OR ')})`, params };
+}
+/** El grupo elegido tiene que ser de la sede (centro) del registro. */
+function checkGroups(req, data, centerId, groups) {
+  for (const f of req.fields.filter((x) => x.type === 'group')) {
+    const v = data[f.key];
+    if (v === '' || v === undefined || v === null) continue;
+    const g = groups.find((x) => x.id === Number(v));
+    if (!g) throw httpError(400, `${f.label}: grupo no encontrado`);
+    if (centerId && g.center_id !== centerId) throw httpError(400, `${f.label}: el grupo «${g.name}» no pertenece a la sede elegida`);
+  }
+}
 const companyUsers = (req) => all(`SELECT DISTINCT u.id, u.name, u.email, u.phone FROM users u
   LEFT JOIN user_assignments a ON a.user_id = u.id AND a.company_id = ?
   WHERE u.deleted_at IS NULL AND u.active = 1 AND (a.id IS NOT NULL OR u.id = ?) ORDER BY u.name`, req.companyId, req.user.id);
@@ -202,9 +233,8 @@ router.get('/', wrap(async (req, res) => {
     if (dueF.length) {
       stats.overdue = (await get(`SELECT COUNT(*) n ${base}${openSql} AND (${dueF.map((x) => `${jv(x.key)} < CURDATE()`).join(' OR ')})`, ...bp, ...(openSql ? closed : []))).n;
     }
-    if (a.owner_field && fields.some((x) => x.key === a.owner_field)) {
-      stats.mine = (await get(`SELECT COUNT(*) n ${base}${openSql} AND ${jv(a.owner_field)} = ?`, ...bp, ...(openSql ? closed : []), String(req.user.id))).n;
-    }
+    const mc = await mineCondition(a, fields, req.user);
+    if (mc) stats.mine = (await get(`SELECT COUNT(*) n ${base}${openSql} AND ${mc.sql}`, ...bp, ...(openSql ? closed : []), ...mc.params)).n;
     delete a.form_layout; // no hace falta en el menú
     out.push({ ...a, count: n, stats, perms: summary(g) });
   }
@@ -224,6 +254,12 @@ router.get('/:appKey', wrap(async (req, res) => {
     can_create_without_center: can(req.grants, 'create', req.user, { center_id: null }),
     can_view_without_center: can(req.grants, 'view', req.user, { center_id: null }),
     centers, users: await companyUsers(req), layouts, closed_values: closedValues(req.appDef),
+    // grupos de trabajo de las sedes visibles (para asignar trabajos); «mine» = soy miembro
+    groups: await (async () => {
+      const mine = new Set(await myGroupIds(req.user.id));
+      const vis = new Set(centers.map((c) => c.id));
+      return (await companyGroups(req.companyId)).filter((g) => vis.has(g.center_id)).map((g) => ({ ...g, mine: mine.has(g.id) }));
+    })(),
     // nombres de todos los usuarios de la empresa (también desactivados) para mostrar registros antiguos
     user_names: Object.fromEntries((await all(`SELECT DISTINCT u.id, u.name FROM users u LEFT JOIN user_assignments a ON a.user_id = u.id AND a.company_id = ?
       WHERE a.user_id IS NOT NULL OR u.is_superadmin = 1`, req.companyId)).map((u) => [u.id, u.name])),
@@ -244,7 +280,7 @@ router.put('/:appKey/layout/:kind', wrap(async (req, res) => {
 }));
 
 // ---------- listado ----------
-function listQuery(req, q) {
+async function listQuery(req, q) {
   const where = ['r.app_id = ?', 'r.company_id = ?'];
   const params = [req.appDef.id, req.companyId];
   const fv = sqlFilter(req.grants, 'view', req.user);
@@ -285,9 +321,10 @@ function listQuery(req, q) {
     const dueF = req.fields.filter((f) => f.type === 'date' && f.options.due_alert);
     where.push(dueF.length ? `(${dueF.map((f) => `${jv(f.key)} < CURDATE()`).join(' OR ')})` : '0');
   }
-  // «míos»: el campo responsable soy yo
-  if (q.mine === '1' && req.appDef.owner_field && req.fields.some((f) => f.key === req.appDef.owner_field)) {
-    where.push(`${jv(req.appDef.owner_field)} = ?`); params.push(String(req.user.id));
+  // «míos»: el campo responsable soy yo o está asignado a uno de mis grupos de trabajo
+  if (q.mine === '1') {
+    const mc = await mineCondition(req.appDef, req.fields, req.user);
+    if (mc) { where.push(mc.sql); params.push(...mc.params); }
   }
   // rango de fechas (vista calendario): date_field, from, to (AAAA-MM-DD)
   if (q.date_field) {
@@ -305,7 +342,7 @@ function listQuery(req, q) {
     if (!f || f.type === 'password') continue;
     if (f.type === 'checkbox') {
       where.push(`${jv(key)} = ?`); params.push(v === '1' || v === 'true' ? 'true' : 'false');
-    } else if (['select', 'user'].includes(f.type)) {
+    } else if (['select', 'user', 'group'].includes(f.type)) {
       where.push(`${jv(key)} = ?`); params.push(String(v));
     } else {
       where.push(`${jv(key)} LIKE ?`); params.push(`%${v}%`);
@@ -327,7 +364,7 @@ function listQuery(req, q) {
 }
 
 router.get('/:appKey/records', wrap(async (req, res) => {
-  const { where, params, order } = listQuery(req, req.query);
+  const { where, params, order } = await listQuery(req, req.query);
   const size = Math.min(Math.max(Number(req.query.size) || 50, 1), 1000);
   const page = Math.max(Number(req.query.page) || 1, 1);
   const total = (await get(`SELECT COUNT(*) n FROM records r LEFT JOIN centers c ON c.id = r.center_id WHERE ${where}`, ...params)).n;
@@ -389,7 +426,9 @@ router.post('/:appKey/records', wrap(async (req, res) => {
   const body = req.body || {};
   const centerId = body.center_id ? Number(body.center_id) : null;
   await checkCenter(req, centerId, 'create');
-  const data = buildData(req, body.data || {}, {}, { users: await activeUsers() });
+  const groups = await companyGroups(req.companyId);
+  const data = buildData(req, body.data || {}, {}, { users: await activeUsers(), groups, centerId });
+  checkGroups(req, data, centerId, groups);
   const id = await tx(async () => {
     await checkUnique(req, data);
     return insertRecord(req, centerId, data, `Alta en ${req.appDef.name}`);
@@ -407,7 +446,9 @@ router.put('/:appKey/records/:id', wrap(async (req, res) => {
     centerId = body.center_id ? Number(body.center_id) : null;
     if (centerId !== rec.center_id) await checkCenter(req, centerId, 'edit');
   }
-  const data = buildData(req, body.data || {}, JSON.parse(rec.data), { users: await activeUsers() });
+  const groups = await companyGroups(req.companyId);
+  const data = buildData(req, body.data || {}, JSON.parse(rec.data), { users: await activeUsers(), groups, centerId });
+  checkGroups(req, data, centerId, groups);
   await tx(async () => {
     await checkUnique(req, data, rec.id);
     await updateRecord(req, rec, centerId, data);
@@ -469,7 +510,8 @@ async function renderTemplate(req, rec, tpl) {
   const data = JSON.parse(rec.data || '{}');
   const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
   const vars = { numero: rec.number, app: req.appDef.name, centro: rec.center_name || '', fecha: String(rec.created_at).slice(0, 10), usuario: req.user.name };
-  for (const f of req.fields) if (f.type !== 'password') vars[f.key] = toText(f, data[f.key], users);
+  const groups = await groupsMap(req.companyId);
+  for (const f of req.fields) if (f.type !== 'password') vars[f.key] = toText(f, data[f.key], users, groups);
   return String(tpl || '').replace(/\{([a-z0-9_]+)\}/g, (m, k) => (k in vars ? String(vars[k] ?? '') : m));
 }
 router.post('/:appKey/records/:id/action/:bid', wrap(async (req, res) => {
@@ -560,7 +602,7 @@ router.post('/:appKey/records/:id/share', wrap(async (req, res) => {
 
 // ---------- exportación ----------
 async function exportRows(req) {
-  const { where, params, order } = listQuery(req, req.query);
+  const { where, params, order } = await listQuery(req, req.query);
   const ids = req.query.ids ? String(req.query.ids).split(',').map(Number).filter(Boolean) : null;
   let rows = await all(`${SELECT_REC} WHERE ${where} ORDER BY ${order}, r.id DESC`, ...params);
   if (ids) rows = rows.filter((r) => ids.includes(r.id));
@@ -591,13 +633,14 @@ router.get('/:appKey/export', wrap(async (req, res) => {
   const withPw = req.query.passwords === '1' && req.grants.view_passwords.length > 0;
   const rows = await exportRows(req);
   const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
+  const groups = await groupsMap(req.companyId);
   const fields = req.fields.filter((f) => f.type !== 'password' || withPw);
   const header = ['Nº', 'Centro', ...fields.map((f) => f.label), 'Creado', 'Modificado', 'Estado'];
   const matrix = rows.map((r) => {
     const d = JSON.parse(r.data);
     const rowCanPw = withPw && can(req.grants, 'view_passwords', req.user, r);
     return [r.number, r.center_code || r.center_name || '',
-      ...fields.map((f) => (f.type === 'password' ? (rowCanPw ? decrypt(d[f.key]) : '') : toText(f, d[f.key], users))),
+      ...fields.map((f) => (f.type === 'password' ? (rowCanPw ? decrypt(d[f.key]) : '') : toText(f, d[f.key], users, groups))),
       r.created_at, r.updated_at, r.deleted_at ? 'BORRADO' : 'Activo'];
   });
   await audit(req, { entity: 'app', entityId: req.appDef.id, action: 'export', appId: req.appDef.id, companyId: req.companyId,
@@ -670,6 +713,7 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
   if (!p || p.userId !== req.user.id || p.appId !== req.appDef.id || p.companyId !== req.companyId) throw httpError(400, 'La importación ha caducado, vuelve a subir el fichero');
   const centers = await visibleCenters(req);
   const users = await activeUsers();
+  const groups = await companyGroups(req.companyId);
   const findCenter = (v) => {
     const s = norm(v);
     if (!s) return undefined;
@@ -707,14 +751,16 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
             if (!can(req.grants, 'edit', req.user, existing)) throw new Error('sin permiso para modificar este registro');
             const newCenter = centerId === undefined ? existing.center_id : centerId;
             if (newCenter !== existing.center_id) await checkCenter(req, newCenter, 'edit');
-            const data = buildData(req, input, JSON.parse(existing.data), { users });
+            const data = buildData(req, input, JSON.parse(existing.data), { users, groups, centerId: newCenter });
+            checkGroups(req, data, newCenter, groups);
             await checkUnique(req, data, existing.id);
             if (await updateRecord(req, existing, newCenter, data, 'Modificación por importación')) result.updated++;
             else result.skipped++;
           } else {
             const cId = centerId === undefined ? (default_center ? Number(default_center) : null) : centerId;
             await checkCenter(req, cId, 'create');
-            const data = buildData(req, input, {}, { users });
+            const data = buildData(req, input, {}, { users, groups, centerId: cId });
+            checkGroups(req, data, cId, groups);
             await checkUnique(req, data);
             await insertRecord(req, cId, data, 'Alta por importación');
             result.created++;

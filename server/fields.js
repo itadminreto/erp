@@ -6,7 +6,7 @@ const FIELD_TYPES = {
   text: 'Texto', textarea: 'Texto largo', number: 'Número entero', decimal: 'Número decimal',
   date: 'Fecha', datetime: 'Fecha y hora', email: 'Email', phone: 'Teléfono', url: 'URL',
   select: 'Lista desplegable', multiselect: 'Selección múltiple', checkbox: 'Sí / No',
-  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)', ip: 'Dirección IP', signature: 'Firma (en pantalla)', image: 'Imagen / foto',
+  password: 'Contraseña (cifrada)', user: 'Usuario', color: 'Color', iban: 'Cuenta bancaria (IBAN)', ip: 'Dirección IP', signature: 'Firma (en pantalla)', image: 'Imagen / foto', group: 'Grupo de trabajo',
 };
 
 function parseField(f) {
@@ -103,6 +103,19 @@ function normalize(field, raw, ctx = {}) {
       if (!u) throw new Error(`${L}: usuario "${raw}" no encontrado`);
       return u.id;
     }
+    case 'group': {
+      // grupo de trabajo (de una sede): por id, código o nombre (importación)
+      const list = ctx.groups || [];
+      if (typeof raw === 'number' || /^\d+$/.test(String(raw))) {
+        const g = list.find((x) => x.id === Number(raw));
+        if (g) return g.id;
+      }
+      const s = String(raw).trim().toLowerCase();
+      const hits = list.filter((x) => (x.code && x.code.toLowerCase() === s) || x.name.toLowerCase() === s);
+      if (hits.length > 1 && ctx.centerId) { const g = hits.find((x) => x.center_id === ctx.centerId); if (g) return g.id; }
+      if (hits.length !== 1) throw new Error(`${L}: grupo de trabajo "${raw}" ${hits.length ? 'repetido en varias sedes' : 'no encontrado'}`);
+      return hits[0].id;
+    }
     case 'iban': return normIban(raw, L);
     case 'ip': return normIp(raw, L);
     case 'signature': {
@@ -158,12 +171,13 @@ function normIp(v, label = 'IP') {
 const fmtIban = (s) => String(s || '').replace(/(.{4})/g, '$1 ').trim();
 
 /** Convierte un valor almacenado a texto legible (para exportar). */
-function toText(field, v, usersById = {}) {
+function toText(field, v, usersById = {}, groupsById = {}) {
   if (v === undefined || v === null || v === '') return '';
   switch (field.type) {
     case 'checkbox': return v ? 'Sí' : 'No';
     case 'multiselect': return Array.isArray(v) ? v.join(', ') : String(v);
     case 'user': return usersById[v] ? usersById[v].name : String(v);
+    case 'group': return groupsById[v] ? groupsById[v].name : String(v);
     case 'iban': return fmtIban(v);
     case 'signature': return v && v.img ? `Firmado ${String(v.at || '').slice(0, 10)}` : '';
     case 'image': return Array.isArray(v) && v.length ? `${v.length} imagen${v.length > 1 ? 'es' : ''}` : '';

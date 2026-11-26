@@ -89,6 +89,13 @@ const SCHEMA = [
     KEY ix_work_groups_center (center_id),
     CONSTRAINT fk_work_groups_center FOREIGN KEY (center_id) REFERENCES centers(id)
   )`,
+  `CREATE TABLE IF NOT EXISTS work_group_members (
+    group_id INT NOT NULL,
+    user_id INT NOT NULL,
+    PRIMARY KEY (group_id, user_id),
+    KEY ix_wgm_user (user_id),
+    CONSTRAINT fk_wgm_group FOREIGN KEY (group_id) REFERENCES work_groups(id)
+  )`,
   `CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(200) NOT NULL,
@@ -347,6 +354,13 @@ async function init() {
     }
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_contact_v1', '1')");
   }
+  // Recados: campo «Grupo de trabajo» para asignar el trabajo a un grupo de la sede. Una sola vez.
+  const rgDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_group_v1'");
+  if (!rgDone.length) {
+    const [rec] = await pool.query("SELECT id FROM apps WHERE `key` = 'recados'");
+    if (rec) await pool.query("INSERT IGNORE INTO fields (app_id, `key`, label, type, width, sort, show_in_list) VALUES (?, 'grupo', 'Grupo de trabajo', 'group', 'md', 3, 1)", [rec.id]);
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_group_v1', '1')");
+  }
   // El asistente de Recados pasa a preguntar todos los campos (menos firmas, imágenes y contraseñas). Una sola vez.
   const vaDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_voice_all_v1'");
   if (!vaDone.length) {
@@ -422,7 +436,7 @@ async function nextNumber(appId, companyId) {
 }
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
-const BACKUP_TABLES = ['companies', 'centers', 'work_groups', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
+const BACKUP_TABLES = ['companies', 'centers', 'work_groups', 'work_group_members', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
   'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files'];
 
 const close = () => pool.end();

@@ -108,6 +108,10 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 con papelera, auditoría y copia de seguridad como el resto. Sus campos adicionales se crean sin programar en
 **Apps y campos → Datos maestros → Grupos de trabajo** (igual que en Empresas y Centros).
 
+Sirven para **asignar trabajos**: el tipo de campo **«Grupo de trabajo»** (Recados ya lo trae) solo ofrece los grupos
+de la sede del registro; los **miembros** del grupo ven esos trabajos en **«Míos»** y en el resumen de Inicio.
+Se puede filtrar por grupo, aparece en la impresión y en la exportación, y al importar se acepta el código o el nombre.
+
 ## Accesibilidad (usuarios invidentes o con baja visión)
 
 Solo para los usuarios marcados en **Usuarios → ♿ Usuario invidente (modo accesible)**; el resto ve la aplicación igual que siempre.

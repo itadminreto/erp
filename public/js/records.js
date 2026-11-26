@@ -50,7 +50,12 @@ export async function renderApp(root, key, onCountsChanged) {
     const i = choices.indexOf(v); return i < 0 ? '#94a3b8' : PALETTE[i % PALETTE.length];
   }
   const hasStatus = !!(meta.app.status_field && fieldsByKey[meta.app.status_field] && closedVals.length);
-  const hasOwner = !!(meta.app.owner_field && fieldsByKey[meta.app.owner_field]);
+  const groupsById = Object.fromEntries((meta.groups || []).map((g) => [g.id, g]));
+  const groupFields = meta.fields.filter((f) => f.type === 'group');
+  const centerById = Object.fromEntries(meta.centers.map((c) => [c.id, c]));
+  /** Nombre del grupo (con la sede si el usuario ve varias). */
+  const groupLabel = (g) => (g ? `${g.name}${meta.centers.length > 1 && centerById[g.center_id] ? ` (${centerById[g.center_id].code || centerById[g.center_id].name})` : ''}` : '');
+  const hasOwner = !!(meta.app.owner_field && fieldsByKey[meta.app.owner_field]) || groupFields.length > 0;
   const isClosed = (r) => hasStatus && closedVals.includes(String(r.data[meta.app.status_field] || '').toLowerCase());
   const todayISO = () => new Date().toISOString().slice(0, 10);
   /** 'over' si la fecha ya pasó, 'soon' si vence en 3 días o menos (solo campos con aviso y registros abiertos). */
@@ -110,13 +115,13 @@ export async function renderApp(root, key, onCountsChanged) {
     [['open', 'Abiertos'], ['closed', 'Cerrados'], ['', 'Todos']].map(([v, l]) => h('button', { class: st.state === v ? 'on' : '', dataset: { v }, onclick: () => {
       st.state = v; st.page = 1; [...stateSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.v === v)); load();
     } }, l))) : null;
-  const mineBtn = hasOwner ? h('button.btn', { class: st.mine ? 'on-toggle' : '', title: `Solo los que tengo en «${fieldsByKey[meta.app.owner_field].label}»`, onclick: () => {
+  const mineBtn = hasOwner ? h('button.btn', { class: st.mine ? 'on-toggle' : '', title: [meta.app.owner_field && fieldsByKey[meta.app.owner_field] ? `asignados a mí en «${fieldsByKey[meta.app.owner_field].label}»` : '', groupFields.length ? 'asignados a mis grupos de trabajo' : ''].filter(Boolean).join(' o ').replace(/^./, (c) => 'Solo los ' + c), onclick: () => {
     st.mine = !st.mine; st.page = 1; mineBtn.classList.toggle('on-toggle', st.mine); load();
   } }, '👤 Míos') : null;
-  const filterable = meta.fields.filter((f) => ['select', 'user', 'checkbox'].includes(f.type));
+  const filterable = meta.fields.filter((f) => ['select', 'user', 'checkbox', 'group'].includes(f.type));
   const filterBtn = filterable.length ? h('button.btn', { onclick: () => openFilters() }, '⚲ ', h('span.lbl', 'Filtros'), h('span.badge', { hidden: true })) : null;
   const activeBar = h('div.active-filters');
-  const filterText = (k, v) => { const f = fieldsByKey[k]; if (!f) return v; return f.type === 'user' ? (usersById[v] ? usersById[v].name : v) : f.type === 'checkbox' ? (v === '1' ? 'Sí' : 'No') : v; };
+  const filterText = (k, v) => { const f = fieldsByKey[k]; if (!f) return v; return f.type === 'user' ? (usersById[v] ? usersById[v].name : v) : f.type === 'group' ? groupLabel(groupsById[v]) || v : f.type === 'checkbox' ? (v === '1' ? 'Sí' : 'No') : v; };
   function drawActiveFilters() {
     const act = Object.entries(st.filters).filter(([k, v]) => v !== '' && fieldsByKey[k]);
     if (filterBtn) { const bd = filterBtn.querySelector('.badge'); bd.hidden = !act.length; bd.textContent = act.length; }
@@ -130,7 +135,8 @@ export async function renderApp(root, key, onCountsChanged) {
     const content = h('div.two-col', filterable.map((f) => {
       const cur = st.filters[f.key] ?? '';
       const opts = f.type === 'select' ? (f.options.choices || []).map((c) => [c, c])
-        : f.type === 'user' ? meta.users.map((u) => [String(u.id), u.name]) : [['1', 'Sí'], ['0', 'No']];
+        : f.type === 'user' ? meta.users.map((u) => [String(u.id), u.name])
+        : f.type === 'group' ? (meta.groups || []).map((g) => [String(g.id), groupLabel(g) + (g.mine ? ' · mi grupo' : '')]) : [['1', 'Sí'], ['0', 'No']];
       sels[f.key] = h('select', h('option', { value: '' }, '— Cualquiera —'), opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === v }, l)));
       return h('div.field', h('label', f.label), sels[f.key]);
     }));
@@ -404,6 +410,7 @@ export async function renderApp(root, key, onCountsChanged) {
       case 'datetime': return fmtDateTime(v);
       case 'checkbox': return v ? '✔ Sí' : 'No';
       case 'user': return usersById[v] ? usersById[v].name : `#${v}`;
+      case 'group': return groupsById[v] ? groupLabel(groupsById[v]) : `Grupo #${v}`;
       case 'multiselect': return v.join(', ');
       case 'select': return h('span.chip.opt', { style: { '--c': choiceColor(f, v) } }, v);
       case 'url': return h('a', { href: v, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, v.replace(/^https?:\/\//, ''));
@@ -613,7 +620,29 @@ export async function renderApp(root, key, onCountsChanged) {
       centerOpts.map((c) => h('option', { value: c.id, selected: rec ? rec.center_id === c.id : String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
 
     const fieldEls = {};
+    const groupSelects = []; // campos «Grupo de trabajo»: solo los grupos de la sede elegida
     for (const f of meta.fields) fieldEls[f.key] = buildField(f);
+    const fillGroups = () => {
+      const cid = Number(centerSelect.value) || null;
+      for (const sel of groupSelects) {
+        const cur = sel.value || sel.dataset.current;
+        const list = (meta.groups || []).filter((g) => (!cid || g.center_id === cid) && (g.active || String(g.id) === String(cur)));
+        clear(sel, h('option', { value: '' }, list.length ? '—' : cid ? '— Esta sede no tiene grupos —' : '—'),
+          list.map((g) => h('option', { value: g.id, selected: String(g.id) === String(cur) }, (cid ? g.name : groupLabel(g)) + (g.mine ? ' · mi grupo' : ''))));
+        if (cur && !list.some((g) => String(g.id) === String(cur))) { sel.value = ''; if (sel.dataset.current) toast('El grupo de trabajo no es de la sede elegida: elige otro', 'error'); }
+        sel.dataset.current = '';
+      }
+    };
+    fillGroups();
+    centerSelect.addEventListener('change', fillGroups);
+    // al elegir un grupo sin sede, se pone la sede del grupo
+    for (const sel of groupSelects) sel.addEventListener('change', () => {
+      const g = groupsById[sel.value];
+      if (g && !centerSelect.value && [...centerSelect.options].some((o) => o.value === String(g.center_id))) {
+        centerSelect.value = String(g.center_id); fillGroups(); sel.value = String(g.id);
+        toast(`Sede: ${centerById[g.center_id] ? centerById[g.center_id].name : ''}`, 'ok');
+      }
+    });
     let saveRef = null; // botón Guardar (lo usan los botones de acción «rellenar y guardar»)
     formGroups(); // carga los botones del diseño en buttonsById
     for (const [bk, b] of Object.entries(buttonsById)) fieldEls[bk] = buildActionButton(b);
@@ -626,6 +655,7 @@ export async function renderApp(root, key, onCountsChanged) {
       if (f.type === 'multiselect') return [...i.selectedOptions].map((o) => o.value).join(', ');
       if (f.type === 'image') { const n = i.value.length; return n ? String(n) : ''; }
       if (f.type === 'user' && readable) return usersById[i.value] ? usersById[i.value].name : '';
+      if (f.type === 'group' && readable) return groupsById[i.value] ? groupsById[i.value].name : '';
       return i.value ?? '';
     }
     const today = () => new Date().toISOString().slice(0, 10);
@@ -802,6 +832,7 @@ export async function renderApp(root, key, onCountsChanged) {
           v && !(f.options.choices || []).includes(v) ? h('option', { value: v, selected: true }, v) : null); break;
         case 'multiselect': input = h('select', { multiple: true, disabled: dis, size: Math.min(6, (f.options.choices || []).length || 3) }, (f.options.choices || []).map((c) => h('option', { value: c, selected: Array.isArray(v) && v.includes(c) }, c))); break;
         case 'user': input = h('select', { disabled: dis }, h('option', { value: '' }, '—'), meta.users.map((u) => h('option', { value: u.id, selected: Number(v) === u.id }, u.name))); break;
+        case 'group': input = h('select', { disabled: dis }); input.dataset.current = v || ''; groupSelects.push(input); break;
         case 'password': {
           const hasValue = v === MASK;
           input = h('input', { type: 'password', value: '', autocomplete: 'new-password', placeholder: hasValue ? MASK + '  (guardada)' : '', disabled: dis,
@@ -939,6 +970,7 @@ export async function renderApp(root, key, onCountsChanged) {
         if (field === '_centro') return v === '' || v === null ? '—' : centerName(v);
         const f = fieldsByKey[field];
         if (f && f.type === 'user' && usersById[v]) return usersById[v].name;
+        if (f && f.type === 'group' && groupsById[v]) return groupsById[v].name;
         if (f && f.type === 'checkbox') return v === true || v === 1 ? 'Sí' : v === false || v === 0 ? 'No' : String(v);
         if (f && f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(v))) return fmtDate(v);
         if (f && f.type === 'datetime' && v) return fmtDateTime(v);

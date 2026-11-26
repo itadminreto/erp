@@ -100,6 +100,7 @@ const APPS = [
       ['telefono', 'Teléfono', 'phone', { width: 'sm' }],
       ['email', 'Email', 'email', { show_in_list: 0 }],
       ['asignado_a', 'Asignado a', 'user'],
+      ['grupo', 'Grupo de trabajo', 'group'],
       ['prioridad', 'Prioridad', 'select', { choices: ['Baja', 'Media', 'Alta', 'Urgente'] }],
       ['estado', 'Estado', 'select', { choices: ['Pendiente', 'En curso', 'Hecho', 'Cancelado'] }],
       ['fecha_limite', 'Fecha límite', 'date', { due_alert: true }],

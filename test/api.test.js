@@ -643,3 +643,40 @@ test('grupos de trabajo por sede con campos dinámicos, papelera y copia de segu
   assert.equal((await ana.call('GET', '/admin/work_groups')).status, 403);
   await admin.call('PUT', `/admin/entity-fields/work_groups/${f.body.id}`, { required: false, active: false });
 });
+
+test('asignar trabajos a grupos de trabajo: sede, miembros, «míos», filtro y exportación', async () => {
+  const fields = (await admin.call('GET', '/apps/recados')).body.fields;
+  assert.equal(fields.find((f) => f.key === 'grupo').type, 'group');
+  const ana = (await admin.call('GET', '/admin/users')).body.find((u) => u.email === 'ana@test.com');
+  const g1 = (await admin.call('POST', '/admin/work_groups', { center_id: ids.c1, code: 'ELEC', name: 'Electricistas', members: [ana.id] })).body;
+  const g2 = (await admin.call('POST', '/admin/work_groups', { center_id: ids.c2, code: 'FONT', name: 'Fontaneros' })).body;
+  assert.deepEqual(g1.members, [ana.id]);
+  assert.deepEqual(g1.member_names, ['Ana']);
+  // el grupo tiene que ser de la sede del trabajo
+  const bad = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Mal', grupo: g2.id } });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /no pertenece a la sede/);
+  const ok = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Cambiar enchufe', grupo: g1.id, estado: 'Pendiente' } });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.data.grupo, g1.id);
+  // por código al importar/normalizar
+  const byCode = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Revisar cuadro', grupo: 'ELEC' } });
+  assert.equal(byCode.body.data.grupo, g1.id);
+  // Ana (miembro) lo ve en «míos» y en la tarjeta de inicio
+  const anaC = client(); await anaC.login('ana@test.com', 'anapass123');
+  const meta = (await anaC.call('GET', '/apps/recados')).body;
+  assert.ok(meta.groups.find((g) => g.id === g1.id).mine);
+  assert.ok(!meta.groups.some((g) => g.id === g2.id), 'solo grupos de sus sedes');
+  const mine = (await anaC.call('GET', '/apps/recados/records?mine=1')).body.rows.map((r) => r.data.titulo).sort();
+  assert.deepEqual(mine, ['Cambiar enchufe', 'Revisar cuadro']);
+  assert.equal((await anaC.call('GET', '/apps')).body.find((a) => a.key === 'recados').stats.mine, 2);
+  // filtro por grupo
+  const filt = (await admin.call('GET', `/apps/recados/records?f_grupo=${g1.id}`)).body;
+  assert.equal(filt.total, 2);
+  // exportación con el nombre del grupo
+  const csv = await admin.call('GET', '/apps/recados/export?format=csv');
+  assert.match(csv.body.toString('utf8'), /Electricistas/);
+  // quitar miembros: deja de verlos
+  await admin.call('PUT', `/admin/work_groups/${g1.id}`, { members: [] });
+  assert.equal((await anaC.call('GET', '/apps/recados/records?mine=1')).body.total, 0);
+});

@@ -58,14 +58,14 @@ async function buildExtra(entity, table, input, before) {
 }
 
 /** CRUD genérico con borrado lógico, campos dinámicos (`extra`) y trazabilidad para tablas simples. */
-function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSql, labelOf = (r) => r.name } = {}) {
+function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSql, labelOf = (r) => r.name, afterSave, decorate = async (rows) => rows } = {}) {
   const dynamic = !!ENTITIES[entity];
-  const reload = async (id) => strip(parseExtra(await get(`SELECT * FROM ${table} WHERE id = ?`, id)));
+  const reload = async (id) => (await decorate([strip(parseExtra(await get(`SELECT * FROM ${table} WHERE id = ?`, id)))]))[0];
   router.get(`/${entity}`, wrap(async (req, res) => {
     const trash = req.query.trash === '1';
     const sql = listSql || `SELECT * FROM ${table}`;
     const rows = await all(`${sql} ${sql.includes('WHERE') ? 'AND' : 'WHERE'} ${trash ? '1' : `${table}.deleted_at IS NULL`} ORDER BY ${orderBy}`);
-    res.json(dynamic ? rows.map(parseExtra) : rows);
+    res.json(await decorate(dynamic ? rows.map(parseExtra) : rows));
   }));
   router.post(`/${entity}`, wrap(async (req, res) => {
     const data = pick(req.body, cols);
@@ -74,6 +74,7 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
     const keys = Object.keys(data);
     const id = Number((await run(`INSERT INTO ${table} (${keys.map(q).join(',')}) VALUES (${keys.map(() => '?').join(',')})`, ...keys.map((k) => data[k]))).lastInsertRowid);
     const shown = { ...data }; if (dynamic) { delete shown.extra; Object.assign(shown, JSON.parse(data.extra)); }
+    if (afterSave) await afterSave(req, id, null);
     await audit(req, { entity, entityId: id, action: 'create', summary: `Alta: ${labelOf(data)}`, changes: diff({}, shown) });
     res.status(201).json(await reload(id));
   }));
@@ -90,6 +91,7 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
     }
     const keys = Object.keys(data);
     if (keys.length) await run(`UPDATE ${table} SET ${keys.map((k) => `${q(k)} = ?`).join(',')} WHERE id = ?`, ...keys.map((k) => data[k]), before.id);
+    if (afterSave) changes = changes.concat(await afterSave(req, before.id, before) || []);
     if (changes.length) await audit(req, { entity, entityId: before.id, action: 'update', summary: `Modificación: ${labelOf({ ...before, ...data })}`, changes });
     res.json(await reload(before.id));
   }));
@@ -115,7 +117,7 @@ router.get('/entity-fields/:entity', wrap(async (req, res) => res.json(await ent
 router.post('/entity-fields/:entity', wrap(async (req, res) => {
   const entity = checkEntity(req.params.entity);
   const d = fieldData(req.body || {}, true);
-  if (d.type === 'password') throw httpError(400, 'Las contraseñas solo pueden usarse en las aplicaciones');
+  if (d.type === 'password' || d.type === 'group') throw httpError(400, 'Este tipo de campo solo puede usarse en las aplicaciones');
   let key = String(req.body.key || slug(d.label)).trim().toLowerCase();
   if (!KEY_RE.test(key)) throw httpError(400, 'Clave de campo no válida');
   if (RESERVED.includes(key)) key = `${key}_2`;
@@ -139,7 +141,7 @@ router.put('/entity-fields/:entity/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM entity_fields WHERE id = ? AND entity = ?', Number(req.params.id), entity);
   if (!before) throw httpError(404, 'Campo no encontrado');
   const d = fieldData(req.body || {}, false);
-  if (d.type === 'password') throw httpError(400, 'Las contraseñas solo pueden usarse en las aplicaciones');
+  if (d.type === 'password' || d.type === 'group') throw httpError(400, 'Este tipo de campo solo puede usarse en las aplicaciones');
   const keys = Object.keys(d);
   if (keys.length) await run(`UPDATE entity_fields SET ${keys.map((k) => q(k) + ' = ?').join(',')} WHERE id = ?`, ...keys.map((k) => d[k]), before.id);
   const changes = diff(pick(before, keys), d);
@@ -153,7 +155,30 @@ crud('companies', 'companies', ['name', 'cif', 'address', 'email', 'phone', 'not
   listSql: 'SELECT id, name, cif, address, email, phone, notes, active, created_at, deleted_at, extra, (logo IS NOT NULL) has_logo FROM companies',
   validate: (d, before) => { if ((!before || 'name' in d) && !String(d.name || '').trim()) throw httpError(400, 'El nombre es obligatorio'); if ('active' in d) d.active = bool(d.active); },
 });
+/** Miembros de los grupos de trabajo (usuarios). */
+async function groupMembers(rows) {
+  if (!rows.length) return rows;
+  const ids = rows.map((r) => r.id);
+  const m = await all(`SELECT gm.group_id, u.id, u.name FROM work_group_members gm JOIN users u ON u.id = gm.user_id
+    WHERE gm.group_id IN (${ids.map(() => '?').join(',')}) ORDER BY u.name`, ...ids);
+  return rows.map((r) => ({ ...r, members: m.filter((x) => x.group_id === r.id).map((x) => x.id), member_names: m.filter((x) => x.group_id === r.id).map((x) => x.name) }));
+}
+async function saveMembers(req, id) {
+  if (!Array.isArray(req.body.members)) return [];
+  const want = [...new Set(req.body.members.map(Number).filter(Boolean))].sort((x, y) => x - y);
+  if (want.length && (await all(`SELECT id FROM users WHERE deleted_at IS NULL AND id IN (${want.map(() => '?').join(',')})`, ...want)).length !== want.length) {
+    throw httpError(400, 'Algún miembro no existe');
+  }
+  const before = (await all('SELECT user_id FROM work_group_members WHERE group_id = ? ORDER BY user_id', id)).map((x) => x.user_id);
+  await run('DELETE FROM work_group_members WHERE group_id = ?', id);
+  for (const u of want) await run('INSERT INTO work_group_members (group_id, user_id) VALUES (?, ?)', id, u);
+  const names = async (list) => (list.length ? (await all(`SELECT name FROM users WHERE id IN (${list.map(() => '?').join(',')}) ORDER BY name`, ...list)).map((x) => x.name).join(', ') : '');
+  const a = await names(before), b = await names(want);
+  return a === b ? [] : [{ field: 'Miembros', from: a, to: b }];
+}
 crud('work_groups', 'work_groups', ['center_id', 'code', 'name', 'notes', 'active'], {
+  decorate: groupMembers,
+  afterSave: (req, id) => saveMembers(req, id),
   orderBy: 'company_name, center_name, work_groups.name',
   listSql: `SELECT work_groups.*, centers.name center_name, centers.code center_code, centers.company_id, companies.name company_name
     FROM work_groups JOIN centers ON centers.id = work_groups.center_id JOIN companies ON companies.id = centers.company_id`,
@@ -358,7 +383,7 @@ router.put('/apps/:id', wrap(async (req, res) => {
     d.closed_values = JSON.stringify(list);
   }
   if ('voice_fields' in d) {
-    const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban'];
+    const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban', 'group'];
     let list = (Array.isArray(d.voice_fields) ? d.voice_fields : []).map(String).filter((k, i, a) => a.indexOf(k) === i);
     if (list.includes('*')) list = ['*']; // todos los campos que se pueden contestar hablando
     for (const k of list.filter((x) => x !== '*')) if (!appF[k] || !VOICE_TYPES.includes(appF[k].type)) throw httpError(400, `El campo «${k}» no se puede preguntar por voz`);

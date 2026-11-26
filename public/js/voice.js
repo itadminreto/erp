@@ -50,7 +50,7 @@ function fromDictation(f, text) {
 }
 
 // ---------- asistente ----------
-const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban'];
+const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban', 'group'];
 
 export async function renderVoice(root, key) {
   const meta = await api('/apps/' + key);
@@ -99,6 +99,10 @@ export async function renderVoice(root, key) {
     if (f.type === 'center') return meta.centers.map((c) => ({ value: c.id, label: c.name }));
     if (f.type === 'select' || f.type === 'multiselect') return (f.options.choices || []).map((c) => ({ value: c, label: c }));
     if (f.type === 'user') return meta.users.map((u) => ({ value: u.id, label: u.name }));
+    if (f.type === 'group') {
+      const cid = centerStep ? answers._center && answers._center.value : (meta.centers[0] ? meta.centers[0].id : null);
+      return (meta.groups || []).filter((g) => g.active && (!cid || g.center_id === cid)).map((g) => ({ value: g.id, label: g.name }));
+    }
     if (f.type === 'checkbox') return [{ value: true, label: 'Sí' }, { value: false, label: 'No' }];
     return null;
   }
