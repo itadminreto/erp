@@ -146,6 +146,7 @@ const SCHEMA = [
     can_purge TINYINT(1) NOT NULL DEFAULT 0,
     can_import TINYINT(1) NOT NULL DEFAULT 0,
     can_export TINYINT(1) NOT NULL DEFAULT 0,
+    can_email TINYINT(1) NOT NULL DEFAULT 0,
     can_view_passwords TINYINT(1) NOT NULL DEFAULT 0,
     can_share_passwords TINYINT(1) NOT NULL DEFAULT 0,
     can_view_history TINYINT(1) NOT NULL DEFAULT 0,
@@ -286,6 +287,13 @@ async function init() {
     KEY idx_files_record (record_id),
     CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Permiso propio «Enviar por correo»: al crearlo se concede a todos los roles que pueden ver la app
+  await pool.query('ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_email TINYINT(1) NOT NULL DEFAULT 0 AFTER can_export');
+  const emDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_email_perm_v1'");
+  if (!emDone.length) {
+    await pool.query('UPDATE role_permissions SET can_email = can_view');
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_email_perm_v1', '1')");
+  }
   // Estado (abierto/cerrado), responsable y avisos de vencimiento por app (una sola vez con valores por defecto)
   await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS status_field VARCHAR(50) NULL');
   await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS closed_values TEXT NULL');

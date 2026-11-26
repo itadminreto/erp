@@ -630,9 +630,9 @@ export async function renderApp(root, key, onCountsChanged) {
       });
     }
     function buildActionButton(b) {
-      const allowed = { set_fields: editable, open_url: true, email: !!rec && P.export, print: !!rec, duplicate: P.create }[b.action];
+      const allowed = { set_fields: editable, open_url: true, email: !!rec && P.email, print: !!rec, duplicate: P.create }[b.action];
       const btn = h('button.btn.act', { type: 'button', class: 'act-' + (b.color || 'primary'), disabled: !allowed,
-        title: !allowed ? (b.action === 'set_fields' ? 'Sin permiso de edición' : b.action === 'email' && rec ? 'Necesitas permiso de exportación' : 'Guarda el registro primero') : '' },
+        title: !allowed ? (b.action === 'set_fields' ? 'Sin permiso de edición' : b.action === 'email' && rec ? 'Tu rol no tiene permiso para enviar por correo' : 'Guarda el registro primero') : '' },
       b.icon ? h('span', b.icon) : null, b.label);
       btn.addEventListener('click', async () => {
         if (b.confirm && !(await confirmDlg(fillTemplate(b.confirm), { ok: b.label, title: b.label }))) return;

@@ -106,7 +106,7 @@ const APPS = [
 
 const ROLES = [
   ['Admin centro', 'Control total de sus centros: ve y envía contraseñas, papelera, importación/exportación', PERMS.filter((p) => p !== 'purge')],
-  ['Editor', 'Consulta, alta y modificación de registros; exportación', ['view', 'create', 'edit', 'export', 'view_history']],
+  ['Editor', 'Consulta, alta y modificación de registros; exportación y envío por correo', ['view', 'create', 'edit', 'export', 'email', 'view_history']],
   ['Consulta', 'Solo lectura', ['view']],
 ];
 

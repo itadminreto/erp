@@ -159,7 +159,7 @@ export const sortable = (el, opts) => (window.Sortable ? window.Sortable.create(
 
 export const PERM_LABELS = {
   view: 'Ver', create: 'Crear', edit: 'Editar', delete: 'Borrar (papelera)', view_trash: 'Ver papelera', restore: 'Restaurar',
-  purge: 'Borrado definitivo', import: 'Importar', export: 'Exportar', view_passwords: 'Ver contraseñas',
+  purge: 'Borrado definitivo', import: 'Importar', export: 'Exportar', email: 'Enviar por correo', view_passwords: 'Ver contraseñas',
   share_passwords: 'Enviar contraseñas', view_history: 'Ver historial', only_own: 'Solo sus registros',
 };
 export const ACTION_LABELS = {

@@ -8,7 +8,7 @@ const SESSION_DAYS = 7;
 
 const PERMS = [
   'view', 'create', 'edit', 'delete', 'view_trash', 'restore', 'purge',
-  'import', 'export', 'view_passwords', 'share_passwords', 'view_history',
+  'import', 'export', 'email', 'view_passwords', 'share_passwords', 'view_history',
 ];
 
 function parseCookies(header = '') {

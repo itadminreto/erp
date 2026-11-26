@@ -556,6 +556,13 @@ test('revisión: búsqueda sin falsos positivos, abiertos/cerrados, míos, usuar
   await admin.call('POST', '/admin/users', { name: 'Solo Ver', email: 'ver@test.com', password: 'verpass123', assignments: [{ company_id: ids.company, role_id: consulta.id }] });
   const ver = client(); await ver.login('ver@test.com', 'verpass123');
   assert.equal((await ver.call('POST', `/apps/recados/records/${a.body.id}/action/mailrev1`)).status, 403);
+  // con el permiso «Enviar por correo» en su rol, sí puede (aunque no tenga «Exportar»)
+  const recApp = (await admin.call('GET', '/admin/apps')).body.find((x) => x.key === 'recados');
+  const perms = consulta.permissions.map((p) => (p.app_id === recApp.id ? { ...p, can_email: 1 } : p));
+  await admin.call('PUT', `/admin/roles/${consulta.id}`, { permissions: perms });
+  const r2 = await ver.call('POST', `/apps/recados/records/${a.body.id}/action/mailrev1`);
+  assert.notEqual(r2.status, 403, 'ya no es un problema de permisos');
+  await admin.call('PUT', `/admin/roles/${consulta.id}`, { permissions: consulta.permissions });
   await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items });
 });
 

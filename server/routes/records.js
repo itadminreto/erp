@@ -477,7 +477,7 @@ router.post('/:appKey/records/:id/action/:bid', wrap(async (req, res) => {
   try { layout = req.appDef.form_layout ? JSON.parse(req.appDef.form_layout) : {}; } catch { layout = {}; }
   const item = (layout.items || []).find((x) => x && x.button && x.button.id === req.params.bid);
   if (!item || item.button.action !== 'email') throw httpError(404, 'Acción no encontrada');
-  if (!can(req.grants, 'export', req.user, rec)) throw httpError(403, 'Enviar datos por correo requiere permiso de exportación');
+  if (!can(req.grants, 'email', req.user, rec)) throw httpError(403, 'Tu rol no tiene permiso para enviar por correo en esta aplicación');
   const b = item.button;
   const data = JSON.parse(rec.data || '{}');
   const to = [b.to_field ? data[b.to_field] : '', b.to_fixed].filter(Boolean).join(', ');
