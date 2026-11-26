@@ -343,9 +343,10 @@ router.put('/apps/:id', wrap(async (req, res) => {
     d.closed_values = JSON.stringify(list);
   }
   if ('voice_fields' in d) {
-    const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'user', 'checkbox'];
-    const list = (Array.isArray(d.voice_fields) ? d.voice_fields : []).map(String).filter((k, i, a) => a.indexOf(k) === i);
-    for (const k of list) if (!appF[k] || !VOICE_TYPES.includes(appF[k].type)) throw httpError(400, `El campo «${k}» no se puede preguntar por voz`);
+    const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban'];
+    let list = (Array.isArray(d.voice_fields) ? d.voice_fields : []).map(String).filter((k, i, a) => a.indexOf(k) === i);
+    if (list.includes('*')) list = ['*']; // todos los campos que se pueden contestar hablando
+    for (const k of list.filter((x) => x !== '*')) if (!appF[k] || !VOICE_TYPES.includes(appF[k].type)) throw httpError(400, `El campo «${k}» no se puede preguntar por voz`);
     d.voice_fields = list.length ? JSON.stringify(list.slice(0, 30)) : null;
   }
   if ('number_start' in d) { d.number_start = Math.round(Number(d.number_start)); if (!Number.isFinite(d.number_start) || d.number_start < 0 || d.number_start > 1e9) throw httpError(400, 'Inicio de numeración no válido'); }

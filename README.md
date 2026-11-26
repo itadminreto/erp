@@ -119,7 +119,7 @@ La pantalla de acceso es accesible para todos (aún no se sabe quién entra).
 ### Asistente por voz («Recoger · Recados»)
 
 Para los usuarios marcados como invidentes aparece en el menú **📞 Recoger · Recados**: una pregunta cada vez,
-leída en voz alta por el navegador (Dirección, Solicitante, Teléfono, Email, Descripción y Fecha límite).
+leída en voz alta por el navegador: todos los campos en el orden del formulario, menos firmas, imágenes y contraseñas.
 Se contesta escribiendo o dictando (dictado de Windows: tecla Windows + H; botón 🎤 solo con HTTPS) y se pulsa Intro.
 Entiende fechas como «hoy», «mañana», «el lunes», «dentro de 3 días» o «15 de diciembre»; repite teléfono y email
 cifra a cifra; Esc vuelve atrás, F2 repite la pregunta; al final lee un resumen (un número corrige ese dato) e Intro guarda.

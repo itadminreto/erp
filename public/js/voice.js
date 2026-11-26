@@ -50,12 +50,21 @@ function fromDictation(f, text) {
 }
 
 // ---------- asistente ----------
+const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban'];
+
 export async function renderVoice(root, key) {
   const meta = await api('/apps/' + key);
   const fieldsByKey = Object.fromEntries(meta.fields.map((f) => [f.key, f]));
   let voiceKeys = [];
   try { voiceKeys = JSON.parse(meta.app.voice_fields || '[]'); } catch { voiceKeys = []; }
-  const fields = voiceKeys.map((k) => fieldsByKey[k]).filter(Boolean);
+  // orden del formulario (diseñador): primero los del diseño, luego el resto en su orden
+  let layout = {};
+  try { layout = meta.app.form_layout ? JSON.parse(meta.app.form_layout) : {}; } catch { layout = {}; }
+  const ordered = [...new Set([...(Array.isArray(layout.items) ? layout.items : []).filter((k) => typeof k === 'string' && fieldsByKey[k]), ...meta.fields.map((f) => f.key)])]
+    .map((k) => fieldsByKey[k]).filter((f) => VOICE_TYPES.includes(f.type));
+  // «*» = todos los campos (menos firmas, imágenes, contraseñas y color); si hay lista, se añaden siempre los obligatorios
+  const all = voiceKeys.includes('*');
+  const fields = ordered.filter((f) => all || voiceKeys.includes(f.key) || (voiceKeys.length && f.required));
   const head = h('h1', `Recoger · ${meta.app.name}`);
   if (!meta.perms.create || !fields.length) {
     clear(root, h('div.page-head', h('div.title', head)), h('div.card.empty', h('p', !meta.perms.create
@@ -88,7 +97,7 @@ export async function renderVoice(root, key) {
 
   function options(f) {
     if (f.type === 'center') return meta.centers.map((c) => ({ value: c.id, label: c.name }));
-    if (f.type === 'select') return (f.options.choices || []).map((c) => ({ value: c, label: c }));
+    if (f.type === 'select' || f.type === 'multiselect') return (f.options.choices || []).map((c) => ({ value: c, label: c }));
     if (f.type === 'user') return meta.users.map((u) => ({ value: u.id, label: u.name }));
     if (f.type === 'checkbox') return [{ value: true, label: 'Sí' }, { value: false, label: 'No' }];
     return null;
@@ -97,6 +106,7 @@ export async function renderVoice(root, key) {
   function question(f) {
     const opts = options(f);
     const q = `${f.label}${f.required ? ', obligatorio' : ''}.`;
+    if (opts && f.type === 'multiselect') return `${q} Opciones: ${optionsText(opts)}. Puedes elegir varias: escribe los números separados por comas.`;
     if (opts) return `${q} Opciones: ${optionsText(opts)}. Escribe el número o el nombre.`;
     if (f.type === 'date') return `${q} Por ejemplo: hoy, mañana, el lunes, 15 de diciembre o 15/12.`;
     if (f.type === 'datetime') return `${q} Fecha y hora, por ejemplo: mañana a las 10.`;
@@ -115,6 +125,17 @@ export async function renderVoice(root, key) {
     const t = String(raw || '').trim();
     if (!t) return f.required ? { error: `${f.label} es obligatorio. Escribe un valor.` } : { value: '', text: '' };
     const opts = options(f);
+    if (opts && f.type === 'multiselect') {
+      const picked = [];
+      for (const part of t.split(/\s*(?:,|;| y )\s*|\s+(?=\d)/).filter(Boolean)) {
+        const n = Number(part);
+        const o = Number.isInteger(n) && n >= 1 && n <= opts.length ? opts[n - 1]
+          : opts.find((x) => norm(x.label) === norm(part)) || (opts.filter((x) => norm(x.label).startsWith(norm(part))).length === 1 ? opts.find((x) => norm(x.label).startsWith(norm(part))) : null);
+        if (!o) return { error: `No reconozco «${part}». Opciones: ${optionsText(opts)}.` };
+        if (!picked.includes(o)) picked.push(o);
+      }
+      return { value: picked.map((o) => o.value), text: picked.map((o) => o.label).join(', ') };
+    }
     if (opts) {
       const n = Number(t);
       if (Number.isInteger(n) && n >= 1 && n <= opts.length) return { value: opts[n - 1].value, text: opts[n - 1].label };

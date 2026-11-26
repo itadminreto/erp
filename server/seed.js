@@ -90,7 +90,7 @@ const APPS = [
   },
   {
     key: 'recados', name: 'Recados', icon: '📋', color: '#8b5cf6', title: 'titulo', calendar: 1, status: 'estado', closed: ['Hecho', 'Cancelado'], owner: 'asignado_a',
-    voice: ['direccion', 'solicitante', 'telefono', 'email', 'descripcion', 'fecha_limite'],
+    voice: ['*'],
     description: 'Tareas, encargos y recados internos',
     fields: [
       ['titulo', 'Título', 'text', { required: 1, width: 'full' }],

@@ -335,6 +335,13 @@ async function init() {
     }
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_contact_v1', '1')");
   }
+  // El asistente de Recados pasa a preguntar todos los campos (menos firmas, imágenes y contraseñas). Una sola vez.
+  const vaDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_voice_all_v1'");
+  if (!vaDone.length) {
+    await pool.query(`UPDATE apps SET voice_fields = '["*"]' WHERE \`key\` = 'recados' AND voice_fields = ?`,
+      [JSON.stringify(['direccion', 'solicitante', 'telefono', 'email', 'descripcion', 'fecha_limite'])]);
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_voice_all_v1', '1')");
+  }
   // «IP fija» de Fibras pasa al nuevo tipo «Dirección IP» (una sola vez)
   const ipDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_ip_type_v1'");
   if (!ipDone.length) {

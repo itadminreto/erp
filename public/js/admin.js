@@ -309,7 +309,8 @@ export async function renderAppsAdmin(root, onChange) {
     if (!v.key) v.key = v.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     try { const r = await api('/admin/apps', { method: 'POST', body: v }); current = r.id; toast('Aplicación creada. Recuerda darle permisos en Roles.', 'ok'); reload(); } catch (e) { toastErr(e); }
   }
-  const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'user', 'checkbox'];
+  const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban'];
+  const voiceList = (a) => { try { return JSON.parse(a.voice_fields || '[]'); } catch { return []; } };
   async function editApp(a) {
     const v = await promptDlg(`Propiedades · ${a.name}`, [
       { key: 'name', label: 'Nombre', value: a.name }, { key: 'icon', label: 'Icono (emoji)', value: a.icon }, { key: 'color', label: 'Color', type: 'color', value: a.color },
@@ -319,13 +320,22 @@ export async function renderAppsAdmin(root, onChange) {
       { key: 'closed_values', label: 'Valores del estado que cierran el registro', value: (() => { try { return JSON.parse(a.closed_values || '[]').join(', '); } catch { return ''; } })(), placeholder: 'Hecho, Cancelado', help: 'Separados por comas. Los registros cerrados no avisan de vencimiento y salen atenuados.' },
       { key: 'owner_field', label: 'Campo responsable (para «Míos»)', type: 'select', value: a.owner_field || '', options: [{ value: '', label: '— Ninguno —' }, ...a.fields.filter((f) => f.type === 'user').map((f) => ({ value: f.key, label: f.label }))] },
       { key: 'number_start', label: 'Numeración: empieza en', type: 'number', value: a.number_start ?? 1000, help: 'Primer número de registro (Nº de trabajo). Si ya hay números mayores, se sigue desde el último.' },
-      { key: 'voice_fields', label: 'Asistente por voz (usuarios invidentes): preguntas', type: 'multiselect',
-        value: (() => { try { return JSON.parse(a.voice_fields || '[]'); } catch { return []; } })(),
+      { key: 'voice_mode', label: 'Asistente por voz (usuarios invidentes)', type: 'select',
+        value: voiceList(a).includes('*') ? 'all' : voiceList(a).length ? 'some' : '',
+        options: [{ value: '', label: 'Desactivado' }, { value: 'all', label: 'Pregunta todos los campos (menos firmas, imágenes y contraseñas)' }, { value: 'some', label: 'Pregunta solo los campos elegidos (y los obligatorios)' }],
+        help: 'Lo ven los usuarios marcados como invidentes (menú «Recoger»). Pregunta en el orden del formulario.' },
+      { key: 'voice_fields', label: 'Campos elegidos (solo si «Pregunta solo los campos elegidos»)', type: 'multiselect',
+        value: voiceList(a).filter((k) => k !== '*'),
         options: a.fields.filter((f) => VOICE_TYPES.includes(f.type)).map((f) => ({ value: f.key, label: f.label })),
-        help: 'Ctrl+clic para marcar varias. Se preguntan en el orden de los campos. Ninguna = sin asistente. Lo ven los usuarios marcados como invidentes (menú «Recoger»).' },
+        help: 'Ctrl+clic para marcar varios. Los campos obligatorios se preguntan siempre.' },
       { key: 'calendar', label: 'Vista calendario (necesita algún campo de fecha)', type: 'checkbox', value: !!a.calendar },
       { key: 'active', label: 'Aplicación activa', type: 'checkbox', value: !!a.active }]);
     if (!v) return;
+    if ('voice_mode' in v) {
+      if (v.voice_mode === 'some' && !v.voice_fields.length) return toast('Elige al menos un campo para el asistente por voz', 'error');
+      v.voice_fields = v.voice_mode === 'all' ? ['*'] : v.voice_mode === 'some' ? v.voice_fields : [];
+      delete v.voice_mode;
+    }
     try { await api(`/admin/apps/${a.id}`, { method: 'PUT', body: v }); toast('Guardado', 'ok'); reload(); } catch (e) { toastErr(e); }
   }
   function editField(target, f) {

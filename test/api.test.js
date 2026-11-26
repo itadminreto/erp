@@ -597,12 +597,17 @@ test('modo accesible solo para los usuarios marcados como invidentes', async () 
 test('asistente por voz: configuración por app y Recados con dirección, teléfono, email y solicitante libre', async () => {
   const apps = (await admin.call('GET', '/admin/apps')).body;
   const rec = apps.find((a) => a.key === 'recados');
-  assert.deepEqual(JSON.parse(rec.voice_fields), ['direccion', 'solicitante', 'telefono', 'email', 'descripcion', 'fecha_limite']);
+  assert.deepEqual(JSON.parse(rec.voice_fields), ['*'], 'por defecto pregunta todos los campos');
   const types = Object.fromEntries(rec.fields.map((f) => [f.key, f.type]));
   assert.equal(types.solicitante, 'text');
   assert.equal(types.direccion, 'text'); assert.equal(types.telefono, 'phone'); assert.equal(types.email, 'email');
   // no se pueden preguntar por voz firmas, imágenes o contraseñas
+  const sigKey = rec.fields.find((f) => f.type === 'signature');
   const bad = await admin.call('PUT', `/admin/apps/${rec.id}`, { voice_fields: ['titulo', 'nope'] });
+  assert.equal(bad.status, 400);
+  if (sigKey) assert.equal((await admin.call('PUT', `/admin/apps/${rec.id}`, { voice_fields: [sigKey.key] })).status, 400);
+  assert.equal((await admin.call('PUT', `/admin/apps/${rec.id}`, { voice_fields: ['*', 'titulo'] })).status, 200);
+  assert.deepEqual(JSON.parse((await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'recados').voice_fields), ['*']);
   assert.equal(bad.status, 400);
   const ok = await admin.call('PUT', `/admin/apps/${rec.id}`, { voice_fields: ['solicitante', 'telefono'] });
   assert.equal(ok.status, 200);
