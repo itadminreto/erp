@@ -733,19 +733,25 @@ export async function renderApp(root, key, onCountsChanged) {
     // una rejilla por sección; en modo pestañas, una pestaña por sección con título
     const { groups, tabs: asTabs, labelSize, inputSize } = formGroups();
     const grids = groups.map(() => h('div.form-grid'));
-    const drawGrids = (gs) => gs.forEach((g, i) => clear(grids[i], g.keys.map((k) => fieldEls[k])));
+    // los botones de acción van en su propia barra (no mezclados con los campos)
+    const drawGrids = (gs) => gs.forEach((g, i) => clear(grids[i], g.keys.filter((k) => !k.startsWith('btn:')).map((k) => fieldEls[k])));
     drawGrids(groups);
+    const btnKeys = groups.flatMap((g) => g.keys.filter((k) => k.startsWith('btn:') && fieldEls[k]));
+    const actionBar = btnKeys.length ? h('div.rec-actions', { role: 'toolbar', 'aria-label': 'Acciones' }, btnKeys.map((k) => fieldEls[k])) : null;
+    const hasFields = (g) => g.keys.some((k) => !k.startsWith('btn:'));
     const titled = groups.map((g, i) => ({ g, i })).filter((x) => x.g.title);
     let showSection = () => {};
     let formBody;
     if (asTabs && titled.length >= 2) {
       const btns = titled.map(({ g, i }) => h('button', { type: 'button', onclick: () => showSection(i) }, g.title));
-      const panes = titled.map(({ i }) => h('div.sec-pane', grids[i]));
+      const panes = titled.map(({ i }) => h('div.sec-pane.form-card', grids[i]));
       showSection = (i) => titled.forEach((t, n) => { const on = t.i === i; btns[n].classList.toggle('active', on); panes[n].hidden = !on; });
-      formBody = [groups[0].title ? null : grids[0], h('div.form-subtabs', btns), panes];
+      formBody = [groups[0].title || !hasFields(groups[0]) ? null : h('section.form-card', grids[0]), h('div.form-subtabs', btns), panes];
       showSection(titled[0].i);
     } else {
-      formBody = groups.map((g, i) => [g.title ? h('h3.form-section-title', g.title) : null, grids[i]]);
+      const many = groups.filter(hasFields).length > 1;
+      formBody = groups.map((g, i) => (hasFields(g) ? h('section.form-card',
+        g.title || many ? h('h3.form-card-title', g.title || 'Datos generales') : null, grids[i]) : null));
     }
 
     function buildField(f) {
@@ -910,6 +916,7 @@ export async function renderApp(root, key, onCountsChanged) {
       h('div.form-top',
         meta.centers.length ? h('div.field', h('label', 'Centro de trabajo / coste'), centerSelect) : null,
         h('div.design-tools.desktop-only', designBtn, resetBtn)),
+      actionBar,
       formBody,
       rec ? h('div.meta-line', h('span', `Nº ${rec.number}`), h('span', `Creado ${fmtDateTime(rec.created_at)}${rec.created_by_name ? ' por ' + rec.created_by_name : ''}`),
         h('span', `Modificado ${fmtDateTime(rec.updated_at)}${rec.updated_by_name ? ' por ' + rec.updated_by_name : ''}`)) : null);
@@ -928,7 +935,13 @@ export async function renderApp(root, key, onCountsChanged) {
     }
 
     const title = rec ? String(rec.data[meta.app.title_field] || meta.app.name) : `Nuevo · ${meta.app.name}`;
-    const m = modal({ title: [h('span', { 'aria-hidden': 'true' }, meta.app.icon || ''), rec ? h('span.num-badge', `Nº ${rec.number}`) : null, h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, title)], size: 'lg', tabs, content: [dataPane, historyPane] });
+    // cabecera: número, título, estado y vencimiento
+    const sf = meta.app.status_field && fieldsByKey[meta.app.status_field];
+    const statusChip = rec && sf && rec.data[sf.key] ? h('span.chip.opt.head-chip', { style: { '--c': choiceColor(sf, rec.data[sf.key]) } }, rec.data[sf.key]) : null;
+    const dueF = rec ? meta.fields.find((f) => f.type === 'date' && dueState(rec, f)) : null;
+    const dueChip = dueF ? h('span.chip.head-chip', { class: dueState(rec, dueF) === 'over' ? 'danger' : 'warn' }, `${dueState(rec, dueF) === 'over' ? '⚠ Vencido' : 'Vence'} ${fmtDate(rec.data[dueF.key])}`) : null;
+    const m = modal({ title: [h('span', { 'aria-hidden': 'true' }, meta.app.icon || ''), rec ? h('span.num-badge', `Nº ${rec.number}`) : null, h('span.head-title', title), statusChip, dueChip], size: 'lg', tabs, content: [dataPane, historyPane] });
+    m.el.classList.add('rec-modal');
     const footer = [];
     if (rec && rec.deleted_at) {
       if (rec.can.restore) footer.push(h('button.btn.ok', { onclick: () => restoreRec(rec, () => m.close()) }, '↩ Restaurar'));

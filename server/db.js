@@ -361,6 +361,20 @@ async function init() {
     if (rec) await pool.query("INSERT IGNORE INTO fields (app_id, `key`, label, type, width, sort, show_in_list) VALUES (?, 'grupo', 'Grupo de trabajo', 'group', 'md', 3, 1)", [rec.id]);
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_group_v1', '1')");
   }
+  // Formulario de Recados organizado en secciones (si aún no tenía). Una sola vez.
+  const rlDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_layout_v1'");
+  if (!rlDone.length) {
+    const [rec] = await pool.query("SELECT id, form_layout FROM apps WHERE `key` = 'recados'");
+    if (rec) {
+      const fields = await pool.query('SELECT id, `key`, label, type FROM fields WHERE app_id = ? AND active = 1 ORDER BY sort, id', [rec.id]);
+      const plan = recadosLayout(fields, rec.form_layout);
+      if (plan) {
+        await pool.query('UPDATE apps SET form_layout = ? WHERE id = ?', [JSON.stringify(plan.layout), rec.id]);
+        for (const [k, w, h] of plan.widths) await pool.query('UPDATE fields SET width = ?, height = ? WHERE app_id = ? AND `key` = ?', [w, h, rec.id, k]);
+      }
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_layout_v1', '1')");
+  }
   // El asistente de Recados pasa a preguntar todos los campos (menos firmas, imágenes y contraseñas). Una sola vez.
   const vaDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_voice_all_v1'");
   if (!vaDone.length) {
@@ -386,6 +400,45 @@ async function init() {
     }
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_entity_fields_v1', '1')");
   }
+}
+
+/**
+ * Diseño por secciones del formulario de Recados. Devuelve null si el diseño actual ya tiene secciones
+ * (lo ha hecho el super admin y se respeta). Los campos que no conoce van a la sección que mejor encaja.
+ */
+function recadosLayout(fields, current) {
+  let lay = {};
+  try { lay = current ? JSON.parse(current) : {}; } catch { lay = {}; }
+  const items = Array.isArray(lay.items) ? lay.items : [];
+  if (items.some((it) => it && typeof it === 'object' && 'section' in it)) return null;
+  const buttons = items.filter((it) => it && typeof it === 'object' && it.button);
+  const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
+  const S = {
+    trabajo: { title: 'Trabajo', keys: [['titulo', 'full'], ['descripcion', 'full', 2]] },
+    cliente: { title: 'Solicitante y ubicación', keys: [['solicitante', 'md'], ['telefono', 'md'], ['email', 'md'], ['direccion', 'full']] },
+    plan: { title: 'Planificación y asignación', keys: [['estado', 'sm'], ['prioridad', 'sm'], ['fecha_limite', 'sm'], ['fecha_realizado', 'sm'], ['asignado_a', 'lg'], ['grupo', 'lg']] },
+    firmas: { title: 'Firmas y fotos', keys: [] },
+    otros: { title: 'Otros datos', keys: [] },
+  };
+  const known = new Set(Object.values(S).flatMap((s) => s.keys.map((k) => k[0])));
+  for (const f of fields) {
+    if (known.has(f.key)) continue;
+    const t = `${f.key} ${f.label}`.toLowerCase();
+    if (f.type === 'signature' || f.type === 'image') S.firmas.keys.push([f.key, 'lg']);
+    else if (/direcc|ubicac|domicil|lugar|poblac|localidad|codigo_postal|c\.p\./.test(t)) S.cliente.keys.push([f.key, 'lg']);
+    else if (/telef|movil|m[oó]vil|email|correo|contacto|cliente|dni|nif/.test(t)) S.cliente.keys.push([f.key, 'md']);
+    else if (/fecha|hora|plazo|prior|estado|grupo|asignad|t[eé]cnico|responsable/.test(t) || ['date', 'datetime', 'user', 'group'].includes(f.type)) S.plan.keys.push([f.key, 'sm']);
+    else S.otros.keys.push([f.key, f.type === 'textarea' ? 'full' : 'md']);
+  }
+  const out = [...buttons];
+  const widths = [];
+  for (const s of Object.values(S)) {
+    const keys = s.keys.filter(([k]) => byKey[k]);
+    if (!keys.length) continue;
+    out.push({ section: s.title });
+    for (const [k, w, h] of keys) { out.push(k); widths.push([k, w, h || 1]); }
+  }
+  return { layout: { ...lay, tabs: false, items: out }, widths };
 }
 
 // Cambios de estructura posteriores a la primera versión (idempotentes).
@@ -441,4 +494,4 @@ const BACKUP_TABLES = ['companies', 'centers', 'work_groups', 'work_group_member
 
 const close = () => pool.end();
 
-module.exports = { pool, all, get, run, tx, init, close, sqlDate, DATA_DIR, DB_NAME, BACKUP_TABLES, nextNumber, assignMissingNumbers };
+module.exports = { recadosLayout, pool, all, get, run, tx, init, close, sqlDate, DATA_DIR, DB_NAME, BACKUP_TABLES, nextNumber, assignMissingNumbers };

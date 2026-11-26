@@ -1,5 +1,5 @@
 'use strict';
-const { get, run, all, tx } = require('./db');
+const { get, run, all, tx, recadosLayout } = require('./db');
 const { hash, PERMS } = require('./auth');
 
 const APPS = [
@@ -134,6 +134,11 @@ async function seed() {
           appId, key, label, type, choices || due_alert ? JSON.stringify({ ...(choices ? { choices } : {}), ...(due_alert ? { due_alert: true } : {}) }) : null,
           rest.required || 0, rest.unique_value || 0, rest.show_in_list ?? 1,
           rest.width || (type === 'textarea' ? 'full' : 'md'), j);
+      }
+      if (a.key === 'recados') { // formulario organizado en secciones
+        const plan = recadosLayout(await all('SELECT id, `key`, label, type FROM fields WHERE app_id = ? ORDER BY sort, id', appId), null);
+        await run('UPDATE apps SET form_layout = ? WHERE id = ?', JSON.stringify(plan.layout), appId);
+        for (const [k, w, hh] of plan.widths) await run('UPDATE fields SET width = ?, height = ? WHERE app_id = ? AND `key` = ?', w, hh, appId, k);
       }
     }
 

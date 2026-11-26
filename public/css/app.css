@@ -478,3 +478,36 @@ textarea.voice-input { min-height: 120px; }
 .voice-ok { color: var(--ok); }
 .voice-opts { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); }
 .voice-opts select { width: auto; }
+
+/* ---------- ficha de registro (formulario profesional) ---------- */
+.modal > .tabs, .modal > .modal-head { flex: none; } /* la pestaña «Datos» ya no se corta */
+.rec-modal .modal-body { background: var(--surface-2); padding: 16px 20px 20px; }
+.rec-modal .modal-head h2 { font-size: 1.12rem; }
+.rec-modal .head-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rec-modal .head-chip { font-size: .74rem; padding: 2px 9px; font-weight: 600; flex: none; }
+.rec-modal .num-badge { flex: none; }
+.rec-modal .form-top { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; }
+.rec-modal .form-top .field label { text-transform: uppercase; letter-spacing: .04em; font-size: .7rem; }
+.form-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 16px; margin-bottom: 12px; }
+.form-card-title { font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: -2px 0 12px; padding-bottom: 9px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.form-card-title::before { content: ""; width: 4px; height: 14px; border-radius: 2px; background: var(--primary); }
+.rec-modal .form-grid { gap: 12px 16px; grid-auto-rows: minmax(52px, auto); }
+.rec-modal .form-grid .field label { font-size: var(--lbl-fs, .76rem); color: var(--muted); font-weight: 600; }
+/* barra de acciones del diseño */
+.rec-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.rec-actions .field.btn-cell { display: block; margin: 0; min-height: 0; width: auto; }
+.rec-actions .field.btn-cell > label { display: none; }
+.rec-actions .field.btn-cell .btn { width: auto; min-height: 34px; padding: 7px 14px; font-size: .88rem; }
+/* firmas y fotos más compactas */
+.rec-modal .sig-field { min-height: 72px; background: var(--surface-2); border-style: dashed; }
+.rec-modal .sig-field img { max-height: 90px; }
+.rec-modal .img-thumbs { min-height: 72px; border-style: dashed; }
+.rec-modal .sig-meta, .rec-modal .img-actions { margin-top: 6px; }
+.rec-modal .meta-line { margin-top: 4px; padding: 0 4px; }
+.rec-modal .sec-pane.form-card { margin-top: 10px; }
+@media (max-width: 760px) {
+  .rec-modal .modal-body { padding: 12px; }
+  .form-card { padding: 12px; }
+  .rec-modal .head-chip { display: none; }
+}
