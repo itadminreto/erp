@@ -1,6 +1,6 @@
 // Utilidades compartidas del frontend: API, creación de elementos, modales, avisos.
-import { announce, trapFocus } from './a11y.js';
-export { announce, pressable } from './a11y.js';
+import { announce, trapFocus, a11yOn } from './a11y.js';
+export { announce, pressable, a11yOn } from './a11y.js';
 export const state = { me: null, companyId: Number(localStorage.getItem('companyId')) || null, apps: [] };
 
 export async function api(path, { method = 'GET', body, raw = false, form } = {}) {
@@ -44,7 +44,7 @@ function append(el, children) {
 export const clear = (el, ...children) => { el.replaceChildren(); append(el, children); return el; };
 
 export function toast(msg, type = '') {
-  const t = h('div.toast', { class: type, 'aria-hidden': 'true' }, msg);
+  const t = h('div.toast', { class: type, 'aria-hidden': a11yOn() ? 'true' : null }, msg); // en modo accesible se lee por announce()
   document.getElementById('toasts').append(t);
   announce(type === 'error' ? 'Error: ' + msg : msg, type === 'error');
   setTimeout(() => t.remove(), type === 'error' ? 6000 : 3200);
@@ -269,7 +269,7 @@ export function signaturePad(title = 'Firmar') {
       title: '✍ ' + title, size: '',
       content: [h('p.muted.small', 'Firme dentro del recuadro con el dedo, un lápiz táctil o el ratón.'), wrap],
       footer: [h('button.btn', { onclick: () => clearPad() }, '↺ Borrar'),
-        h('button.btn', { title: 'Alternativa accesible: escribe tu nombre y se convierte en firma', onclick: () => typed() }, '⌨ Firmar escribiendo el nombre'),
+        a11yOn() ? h('button.btn', { title: 'Alternativa accesible: escribe tu nombre y se convierte en firma', onclick: () => typed() }, '⌨ Firmar escribiendo el nombre') : null,
         h('div.spacer'),
         h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
         h('button.btn.primary', { onclick: () => {

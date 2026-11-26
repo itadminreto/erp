@@ -1,4 +1,5 @@
 // Accesibilidad para lectores de pantalla (NVDA, JAWS, VoiceOver, TalkBack) y uso solo con teclado.
+// Solo se activa para los usuarios marcados como «Usuario invidente (modo accesible)» en Usuarios.
 // Se aplica automáticamente sobre todo lo que se pinta en la página, así las pantallas nuevas también lo heredan:
 //  · asocia cada etiqueta con su campo, marca los obligatorios y las ayudas;
 //  · da nombre legible a los botones de solo icono y quita los emojis decorativos de lo que se lee;
@@ -93,16 +94,31 @@ function schedule() {
   requestAnimationFrame(() => { pending = false; scan(); });
 }
 
-export function startA11y() {
-  applyPrefs();
+let observer = null;
+/** ¿Está activo el modo accesible para el usuario actual? */
+export const a11yOn = () => document.documentElement.dataset.access === '1';
+/** Activa o desactiva el modo accesible (según la ficha del usuario). */
+export function startA11y(on) {
+  if (!on) {
+    delete document.documentElement.dataset.access;
+    if (observer) { observer.disconnect(); observer = null; }
+    applyPrefs(false);
+    return;
+  }
+  document.documentElement.dataset.access = '1';
+  applyPrefs(true);
   scan();
-  new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden'] });
+  if (!observer) {
+    observer = new MutationObserver(schedule);
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden'] });
+  }
 }
 
 // ---------- avisos hablados ----------
 let regions = null;
 /** Lee un mensaje en voz alta con el lector de pantalla (sin mostrar nada). */
 export function announce(msg, assertive = false) {
+  if (!a11yOn()) return;
   if (!regions) {
     regions = {
       polite: Object.assign(document.createElement('div'), { className: 'sr-only' }),
@@ -147,10 +163,10 @@ export function getPrefs() {
 }
 export function setPrefs(p) {
   try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch { /* sin almacenamiento */ }
-  applyPrefs();
+  applyPrefs(a11yOn());
 }
-function applyPrefs() {
-  const p = getPrefs();
+function applyPrefs(on) {
+  const p = on ? getPrefs() : {};
   const d = document.documentElement.dataset;
   d.text = p.text || 'normal';
   if (p.contrast) d.contrast = '1'; else delete d.contrast;

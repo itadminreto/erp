@@ -575,3 +575,21 @@ test('revisión: los registros de un usuario desactivado siguen mostrando su nom
   assert.ok(!meta.users.some((x) => x.id === u.body.id), 'no se ofrece para elegir');
   assert.equal(meta.user_names[u.body.id], 'Temporal', 'pero se conoce su nombre');
 });
+
+test('modo accesible solo para los usuarios marcados como invidentes', async () => {
+  const roles = (await admin.call('GET', '/admin/roles')).body.roles;
+  const consulta = roles.find((r) => r.name === 'Consulta');
+  const r = await admin.call('POST', '/admin/users', { name: 'Pepe', email: 'pepe@test.com', password: 'pepepass123', must_change_password: false, accessible: true,
+    assignments: [{ company_id: ids.company, center_id: null, role_id: consulta.id }] });
+  assert.equal(r.status, 201);
+  const pepe = client();
+  await pepe.login('pepe@test.com', 'pepepass123');
+  assert.equal((await pepe.call('GET', '/me')).body.accessible, true);
+  const ul = await admin.call('GET', '/admin/users');
+  assert.equal(ul.status, 200, JSON.stringify(ul.body));
+  const u = ul.body.find((x) => x.email === 'pepe@test.com');
+  assert.equal(u.accessible, 1);
+  await admin.call('PUT', `/admin/users/${u.id}`, { accessible: false });
+  assert.equal((await pepe.call('GET', '/me')).body.accessible, false);
+  assert.equal((await admin.call('GET', '/me')).body.accessible, false, 'por defecto, desactivado');
+});

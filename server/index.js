@@ -64,7 +64,7 @@ app.get('/api/me', requireAuth, wrap(async (req, res) => {
   const u = req.user;
   res.json({
     id: u.id, name: u.name, email: u.email, phone: u.phone, is_superadmin: u.is_superadmin,
-    must_change_password: !!u.must_change_password,
+    must_change_password: !!u.must_change_password, accessible: !!u.is_accessible,
     companies: req.companies, company_id: req.companyId,
     app_name: await getSetting('app_name', 'Gestión de Aplicaciones'),
   });

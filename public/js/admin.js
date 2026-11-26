@@ -1,5 +1,5 @@
 // Panel de super administración: empresas, centros, usuarios, roles/políticas, aplicaciones y campos, ajustes y auditoría.
-import { api, h, clear, toast, toastErr, modal, confirmDlg, promptDlg, fmtDate, fmtDateTime, download, debounce, sortable, PERM_LABELS, ACTION_LABELS } from './core.js';
+import { api, h, clear, toast, toastErr, modal, confirmDlg, promptDlg, fmtDate, fmtDateTime, download, debounce, sortable, PERM_LABELS, ACTION_LABELS, a11yOn } from './core.js';
 
 const head = (title, sub, ...actions) => h('div.page-head', h('div.title', h('div', h('h1', title), sub ? h('div.muted.small', sub) : null)), h('div.btn-group', actions));
 
@@ -54,7 +54,7 @@ async function simpleEntity(root, { title, sub, path, columns, form, newLabel, o
       h('thead', h('tr', columns.map((c) => h('th.nosort', c.label)), h('th.nosort', h('span.sr-only', 'Acciones')))),
       h('tbody', list.map((r) => h('tr', { class: r.deleted_at ? 'deleted' : '', onclick: () => !r.deleted_at && edit(r) },
         columns.map((c) => h('td', c.render ? c.render(r, load) : r[c.key] ?? '')),
-        h('td.actions', { onclick: (e) => e.stopPropagation() }, r.deleted_at ? null : h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', onclick: () => edit(r) }, `Editar ${r.name || r.code || ''}`), r.deleted_at
+        h('td.actions', { onclick: (e) => e.stopPropagation() }, r.deleted_at || !a11yOn() ? null : h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', onclick: () => edit(r) }, `Editar ${r.name || r.code || ''}`), r.deleted_at
           ? h('button.btn.sm.ok', { onclick: async () => { await api(`/admin/${path}/${r.id}/restore`, { method: 'POST' }); toast('Restaurado', 'ok'); load(); onChange && onChange(); } }, '↩ Restaurar')
           : h('button.btn.sm.ghost', { title: 'Papelera', 'aria-label': `Enviar ${r.name || r.code || ''} a la papelera`, onclick: async () => {
             if (!(await confirmDlg('¿Enviar a la papelera? Podrás restaurarlo después.', { danger: true }))) return;
@@ -134,12 +134,13 @@ export async function renderUsers(root) {
     const list = users.filter((u) => !filter || `${u.name} ${u.email}`.toLowerCase().includes(filter));
     clear(box, h('div.table-wrap', h('table.data', h('thead', h('tr', ['Nombre', 'Email', 'Teléfono', 'Accesos', 'Último acceso', 'Estado', ''].map((t) => h('th.nosort', t)))),
       h('tbody', list.map((u) => h('tr', { class: u.deleted_at ? 'deleted' : '', onclick: () => !u.deleted_at && edit(u) },
-        h('td', h('strong', u.name), u.is_superadmin ? h('span.chip.warn', { style: { marginLeft: '6px' } }, 'Super admin') : null),
+        h('td', h('strong', u.name), u.is_superadmin ? h('span.chip.warn', { style: { marginLeft: '6px' } }, 'Super admin') : null,
+          u.accessible ? h('span.chip', { style: { marginLeft: '6px' }, title: 'Modo accesible activado' }, '♿ Accesible') : null),
         h('td', u.email), h('td', u.phone || ''),
         h('td', { style: { whiteSpace: 'normal' } }, u.assignments.map((a) => h('span.chip', { style: { margin: '2px' } }, `${a.company_name} › ${a.center_name || 'Todos'} › ${a.role_name}`))),
         h('td.small', fmtDateTime(u.last_login)),
         h('td', h('span.chip', { class: u.active ? 'ok' : '' }, u.active ? 'Activo' : 'Inactivo')),
-        h('td.actions', { onclick: (e) => e.stopPropagation() }, u.deleted_at ? null : h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', onclick: () => edit(u) }, `Editar ${u.name}`), u.deleted_at
+        h('td.actions', { onclick: (e) => e.stopPropagation() }, u.deleted_at || !a11yOn() ? null : h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', onclick: () => edit(u) }, `Editar ${u.name}`), u.deleted_at
           ? h('button.btn.sm.ok', { onclick: async () => { await api(`/admin/users/${u.id}/restore`, { method: 'POST' }); load(); } }, '↩ Restaurar')
           : h('button.btn.sm.ghost', { 'aria-label': `Enviar a ${u.name} a la papelera`, onclick: async () => { if (await confirmDlg(`¿Enviar a ${u.name} a la papelera? Perderá el acceso.`, { danger: true })) { try { await api(`/admin/users/${u.id}`, { method: 'DELETE' }); load(); } catch (e) { toastErr(e); } } } }, '🗑️'))))))));
   }
@@ -148,6 +149,7 @@ export async function renderUsers(root) {
       name: h('input', { value: u ? u.name : '' }), email: h('input', { type: 'email', value: u ? u.email : '' }), phone: h('input', { type: 'tel', value: u ? u.phone || '' : '' }),
       password: h('input', { type: 'password', autocomplete: 'new-password', placeholder: u ? 'Dejar vacío para no cambiar' : 'Mínimo 8 caracteres' }),
       is_superadmin: h('input', { type: 'checkbox', checked: u ? !!u.is_superadmin : false }),
+      accessible: h('input', { type: 'checkbox', checked: u ? !!u.accessible : false }),
       active: h('input', { type: 'checkbox', checked: u ? !!u.active : true }),
       must_change_password: h('input', { type: 'checkbox', checked: u ? !!u.must_change_password : true }),
     };
@@ -168,11 +170,12 @@ export async function renderUsers(root) {
       content: h('div.stack',
         h('div.two-col', h('div.field', h('label', 'Nombre *'), f.name), h('div.field', h('label', 'Email (usuario de acceso) *'), f.email),
           h('div.field', h('label', 'Teléfono (para WhatsApp/SMS)'), f.phone), h('div.field', h('label', u ? 'Nueva contraseña' : 'Contraseña inicial *'), f.password)),
-        h('div.row', h('label.check', f.active, 'Activo'), h('label.check', f.must_change_password, 'Debe cambiar la contraseña'), h('label.check', f.is_superadmin, 'Super administrador')),
+        h('div.row', h('label.check', f.active, 'Activo'), h('label.check', f.must_change_password, 'Debe cambiar la contraseña'), h('label.check', f.is_superadmin, 'Super administrador'),
+          h('label.check', { title: 'Activa el modo para lector de pantalla y teclado, firma escribiendo el nombre y las opciones de ♿ Accesibilidad' }, f.accessible, '♿ Usuario invidente (modo accesible)')),
         h('div', h('h3', 'Accesos (empresa › centro › rol)'), h('p.muted.small', 'Un usuario puede tener varios roles en distintas empresas y centros. "Todos los centros" da acceso a toda la empresa.')),
         asgList, h('div', h('button.btn.sm', { onclick: () => addAsg() }, '＋ Añadir acceso'))),
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
-        const body = { name: f.name.value, email: f.email.value, phone: f.phone.value, is_superadmin: f.is_superadmin.checked, active: f.active.checked, must_change_password: f.must_change_password.checked, assignments: [...asgList.querySelectorAll('.asg')].map((r) => r.get()) };
+        const body = { name: f.name.value, email: f.email.value, phone: f.phone.value, is_superadmin: f.is_superadmin.checked, accessible: f.accessible.checked, active: f.active.checked, must_change_password: f.must_change_password.checked, assignments: [...asgList.querySelectorAll('.asg')].map((r) => r.get()) };
         if (f.password.value) body.password = f.password.value;
         try { if (u) await api(`/admin/users/${u.id}`, { method: 'PUT', body }); else await api('/admin/users', { method: 'POST', body }); toast('Usuario guardado', 'ok'); m.close(); load(); } catch (e) { toastErr(e); }
       } }, 'Guardar')],

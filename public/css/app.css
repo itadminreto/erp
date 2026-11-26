@@ -426,11 +426,13 @@ table.data thead:hover th .grip { width: 12px; }
 .sr-only-focusable:not(:focus):not(:focus-visible) { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .skip-link { position: fixed; left: 12px; top: -60px; z-index: 1000; background: var(--primary); color: var(--primary-text); padding: 10px 16px; border-radius: 8px; font-weight: 600; }
 .skip-link:focus { top: 12px; }
-:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
-.btn:focus-visible, a:focus-visible, [role=button]:focus-visible, .seg button:focus-visible, .tabs button:focus-visible, .dropdown-menu button:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 25%, transparent); }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* modo accesible (usuarios marcados): foco más grueso y visible */
+html[data-access="1"] :focus-visible { outline: 3px solid var(--primary); }
+html[data-access="1"] :is(.btn, a, [role=button], .seg button, .tabs button, .dropdown-menu button):focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 25%, transparent); }
 .modal-head h2:focus { outline: none; }
 main:focus, h1:focus { outline: none; }
-tr:focus-within td { background: var(--primary-2); }
+html[data-access="1"] tr:focus-within td { background: var(--primary-2); }
 .th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
 .th-sort:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
 .sort-item .up, .sort-item .down { padding: 2px 7px; min-height: 0; font-size: .7rem; }

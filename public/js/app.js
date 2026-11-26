@@ -8,7 +8,6 @@ const root = document.getElementById('root');
 let shell = null, nav = null, content = null;
 
 try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch { /* sin almacenamiento */ }
-startA11y();
 
 async function boot() {
   try {
@@ -18,6 +17,7 @@ async function boot() {
   }
   if (!state.companyId || !state.me.companies.some((c) => c.id === state.companyId)) state.companyId = state.me.company_id;
   document.title = state.me.app_name;
+  startA11y(state.me.accessible);
   buildShell();
   await refreshApps();
   window.addEventListener('hashchange', route);
@@ -26,8 +26,10 @@ async function boot() {
 }
 
 function renderLogin() {
-  const email = h('input', { type: 'email', autocomplete: 'username', placeholder: 'usuario@empresa.com', required: true });
-  const pass = h('input', { type: 'password', autocomplete: 'current-password', required: true });
+  startA11y(false);
+  // la pantalla de acceso es accesible para todos (aún no se sabe quién entra)
+  const email = h('input', { id: 'login-email', type: 'email', autocomplete: 'username', placeholder: 'usuario@empresa.com', required: true });
+  const pass = h('input', { id: 'login-pass', type: 'password', autocomplete: 'current-password', required: true });
   const err = h('p.error', { hidden: true, role: 'alert' });
   const btn = h('button.btn.primary.block', { type: 'submit' }, 'Entrar');
   document.body.classList.add('center-page');
@@ -39,7 +41,7 @@ function renderLogin() {
     },
   }, h('h1.brand', { style: { padding: 0 } }, h('div.logo', 'G'), 'Gestión de Aplicaciones'),
   h('p.muted', 'Accede con tu usuario corporativo.'),
-  h('div.field', h('label', 'Email'), email), h('div.field', h('label', 'Contraseña'), pass), err, btn));
+  h('div.field', h('label', { for: 'login-email' }, 'Email'), email), h('div.field', h('label', { for: 'login-pass' }, 'Contraseña'), pass), err, btn));
   document.title = 'Iniciar sesión · Gestión de Aplicaciones';
   setTimeout(() => email.focus(), 0);
 }
@@ -60,7 +62,7 @@ function buildShell() {
     h('div.acts',
       h('button.btn.sm.ghost', { title: 'Mi perfil', onclick: () => changePassword(false) }, '⚙ Perfil'),
       h('button.btn.sm.ghost', { title: 'Cambiar tema claro/oscuro', onclick: toggleTheme }, '◐ Tema'),
-      h('button.btn.sm.ghost', { title: 'Accesibilidad: tamaño de letra, contraste, lector de pantalla', onclick: openA11y }, '♿ Accesibilidad'),
+      state.me.accessible ? h('button.btn.sm.ghost', { title: 'Accesibilidad: tamaño de letra, contraste, lector de pantalla', onclick: openA11y }, '♿ Accesibilidad') : null,
       h('button.btn.sm.ghost', { title: 'Cerrar sesión', onclick: async () => { await api('/logout', { method: 'POST' }); location.reload(); } }, '⎋ Salir')));
   const company = state.me.companies.find((c) => c.id === state.companyId);
   const brandIcon = company && company.has_logo ? h('img.logo-img', { src: `/api/companies/${company.id}/logo?v=${Date.now()}`, alt: '' }) : h('div.logo', 'G');
@@ -74,7 +76,7 @@ function buildShell() {
   const topbar = h('header.topbar', menuBtn, h('strong', state.me.app_name));
   const skip = h('a.skip-link', { href: '#main', onclick: (e) => { e.preventDefault(); content.focus(); } }, 'Saltar al contenido');
   shell = h('div.shell', sidebar, h('div.backdrop', { onclick: () => shell.classList.remove('nav-open') }), h('div.main', topbar, content));
-  clear(root, skip, shell);
+  clear(root, state.me.accessible ? skip : null, shell);
 }
 
 function toggleTheme() {

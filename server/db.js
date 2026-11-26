@@ -84,6 +84,7 @@ const SCHEMA = [
     phone VARCHAR(50),
     password_hash VARCHAR(100),
     is_superadmin TINYINT(1) NOT NULL DEFAULT 0,
+    is_accessible TINYINT(1) NOT NULL DEFAULT 0,
     active TINYINT(1) NOT NULL DEFAULT 1,
     must_change_password TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -287,6 +288,8 @@ async function init() {
     KEY idx_files_record (record_id),
     CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Modo accesible (lector de pantalla) solo para los usuarios marcados
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_accessible TINYINT(1) NOT NULL DEFAULT 0 AFTER is_superadmin');
   // Permiso propio «Enviar por correo»: al crearlo se concede a todos los roles que pueden ver la app
   await pool.query('ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_email TINYINT(1) NOT NULL DEFAULT 0 AFTER can_export');
   const emDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_email_perm_v1'");

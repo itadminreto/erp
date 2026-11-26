@@ -187,20 +187,21 @@ router.delete('/companies/:id/logo', wrap(async (req, res) => {
 // ---------- usuarios ----------
 router.get('/users', wrap(async (req, res) => {
   const trash = req.query.trash === '1';
-  const users = await all(`SELECT id, email, name, phone, is_superadmin, active, must_change_password, created_at, last_login, deleted_at
+  const users = await all(`SELECT id, email, name, phone, is_superadmin, is_accessible, active, must_change_password, created_at, last_login, deleted_at
                      FROM users ${trash ? '' : 'WHERE deleted_at IS NULL'} ORDER BY name`);
   const asg = await all(`SELECT a.*, r.name role_name, c.name company_name, ce.name center_name, ce.code center_code
                    FROM user_assignments a JOIN roles r ON r.id = a.role_id JOIN companies c ON c.id = a.company_id
                    LEFT JOIN centers ce ON ce.id = a.center_id`);
-  res.json(users.map((u) => ({ ...u, assignments: asg.filter((a) => a.user_id === u.id) })));
+  res.json(users.map(({ is_accessible, ...u }) => ({ ...u, accessible: is_accessible, assignments: asg.filter((a) => a.user_id === u.id) })));
 }));
 
 async function saveUser(req, before) {
   const b = req.body || {};
-  const d = pick(b, ['email', 'name', 'phone', 'is_superadmin', 'active', 'must_change_password']);
+  const d = pick(b, ['email', 'name', 'phone', 'is_superadmin', 'accessible', 'active', 'must_change_password']);
+  if ('accessible' in d) { d.is_accessible = d.accessible; delete d.accessible; } // «accessible» es palabra reservada en MariaDB
   if ('email' in d) { d.email = String(d.email).trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+$/.test(d.email)) throw httpError(400, 'Email no válido'); }
   if (!before && (!d.email || !String(d.name || '').trim())) throw httpError(400, 'Nombre y email obligatorios');
-  for (const k of ['is_superadmin', 'active', 'must_change_password']) if (k in d) d[k] = bool(d[k]);
+  for (const k of ['is_superadmin', 'is_accessible', 'active', 'must_change_password']) if (k in d) d[k] = bool(d[k]);
   if (before && before.id === req.user.id && (d.is_superadmin === 0 || d.active === 0)) throw httpError(400, 'No puedes quitarte tus propios privilegios ni desactivarte');
   const dup = d.email && await get('SELECT id FROM users WHERE email = ? AND id <> ?', d.email, before ? before.id : 0);
   if (dup) throw httpError(409, 'Ya existe un usuario con ese email');

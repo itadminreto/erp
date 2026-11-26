@@ -104,6 +104,9 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 
 ## Accesibilidad (usuarios invidentes o con baja visión)
 
+Solo para los usuarios marcados en **Usuarios → ♿ Usuario invidente (modo accesible)**; el resto ve la aplicación igual que siempre.
+La pantalla de acceso es accesible para todos (aún no se sabe quién entra).
+
 - Compatible con lectores de pantalla: NVDA, JAWS, Narrador, VoiceOver (Mac/iPhone) y TalkBack (Android).
 - Todo se maneja con teclado: «Saltar al contenido» con el primer Tab, foco visible, Esc cierra ventanas y menús,
   flechas en los menús desplegables, el foco queda atrapado en la ventana abierta y vuelve a su sitio al cerrarla.

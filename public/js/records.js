@@ -2,7 +2,7 @@
 import {
   api, h, clear, toast, toastErr, modal, confirmDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
   genPassword, copy, sortable, ACTION_LABELS, state, ipMask, signaturePad, prepareImage, imageViewer, webcamPhoto, canUseWebcam,
-  announce, pressable,
+  announce, pressable, a11yOn,
 } from './core.js';
 import { printDoc, docPdf, blobToBase64, esc } from './print.js';
 
@@ -445,7 +445,7 @@ export async function renderApp(root, key, onCountsChanged) {
       h('td.cb', { onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox', dataset: { fk: 'sel-' + r.id }, 'aria-label': `Seleccionar ${recName(r)}`, checked: st.selected.has(r.id), onchange: (e) => { e.target.checked ? st.selected.add(r.id) : st.selected.delete(r.id); drawBulk(); } })),
       cols.map((c) => h('td', { class: c.key === meta.app.title_field ? 'wrap' : '', title: typeof cellValue(r, c.key, { reveal: false }) === 'string' ? cellValue(r, c.key) : '' }, cellValue(r, c.key))),
       h('td.actions', { onclick: (e) => e.stopPropagation() },
-        h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', dataset: { fk: 'open-' + r.id }, 'aria-label': `Abrir ${recName(r)}`, onclick: () => openRecord(r) }, 'Abrir'), rowActions(r)))));
+        a11yOn() ? h('button.btn.sm.ghost.sr-only-focusable', { type: 'button', dataset: { fk: 'open-' + r.id }, 'aria-label': `Abrir ${recName(r)}`, onclick: () => openRecord(r) }, 'Abrir') : null, rowActions(r)))));
     const table = h('table.data', h('caption.sr-only', `${meta.app.name}: ${st.total} registro${st.total === 1 ? '' : 's'}. Página ${st.page} de ${pagesCount()}.`), h('thead', headRow), tbody);
     clear(tableWrap, st.rows.length ? table : emptyState());
     sortable(headRow, {
@@ -554,12 +554,12 @@ export async function renderApp(root, key, onCountsChanged) {
     };
     const list = h('div.sort-list', order.map((c) => h('div.sort-item', { dataset: { col: c } },
       h('span.grip', '⋮⋮'), h('label.check.grow', h('input', { type: 'checkbox', checked: columns.includes(c) }), colDef(c).label),
-      h('button.btn.ghost.sm.up', { type: 'button', 'aria-label': `Subir ${colDef(c).label}`, title: 'Subir', onclick: (e) => move(e.currentTarget.parentElement, -1) }, '▲'),
-      h('button.btn.ghost.sm.down', { type: 'button', 'aria-label': `Bajar ${colDef(c).label}`, title: 'Bajar', onclick: (e) => move(e.currentTarget.parentElement, 1) }, '▼'))));
+      a11yOn() ? h('button.btn.ghost.sm.up', { type: 'button', 'aria-label': `Subir ${colDef(c).label}`, title: 'Subir', onclick: (e) => move(e.currentTarget.parentElement, -1) }, '▲') : null,
+      a11yOn() ? h('button.btn.ghost.sm.down', { type: 'button', 'aria-label': `Bajar ${colDef(c).label}`, title: 'Bajar', onclick: (e) => move(e.currentTarget.parentElement, 1) }, '▼') : null)));
     sortable(list, { handle: '.grip' });
     const m = modal({
       title: 'Columnas visibles', size: 'sm',
-      content: [h('p.muted.small', 'Marca las columnas que quieres ver y arrástralas (o usa ▲ ▼) para ordenarlas. El diseño se guarda para tu usuario.'), list],
+      content: [h('p.muted.small', 'Marca las columnas que quieres ver y arrástralas para ordenarlas. El diseño se guarda para tu usuario.'), list],
       footer: [h('button.btn.ghost', { onclick: async () => { columns = defaultCols(); await api(`/apps/${key}/layout/list`, { method: 'PUT', body: { reset: true } }); m.close(); draw(); } }, 'Restablecer'),
         h('div.spacer'), h('button.btn.primary', { onclick: () => {
           columns = [...list.children].filter((el) => el.querySelector('input').checked).map((el) => el.dataset.col);
