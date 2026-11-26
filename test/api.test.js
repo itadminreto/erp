@@ -593,3 +593,23 @@ test('modo accesible solo para los usuarios marcados como invidentes', async () 
   assert.equal((await pepe.call('GET', '/me')).body.accessible, false);
   assert.equal((await admin.call('GET', '/me')).body.accessible, false, 'por defecto, desactivado');
 });
+
+test('asistente por voz: configuración por app y Recados con dirección, teléfono, email y solicitante libre', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const rec = apps.find((a) => a.key === 'recados');
+  assert.deepEqual(JSON.parse(rec.voice_fields), ['direccion', 'solicitante', 'telefono', 'email', 'descripcion', 'fecha_limite']);
+  const types = Object.fromEntries(rec.fields.map((f) => [f.key, f.type]));
+  assert.equal(types.solicitante, 'text');
+  assert.equal(types.direccion, 'text'); assert.equal(types.telefono, 'phone'); assert.equal(types.email, 'email');
+  // no se pueden preguntar por voz firmas, imágenes o contraseñas
+  const bad = await admin.call('PUT', `/admin/apps/${rec.id}`, { voice_fields: ['titulo', 'nope'] });
+  assert.equal(bad.status, 400);
+  const ok = await admin.call('PUT', `/admin/apps/${rec.id}`, { voice_fields: ['solicitante', 'telefono'] });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(JSON.parse((await admin.call('GET', '/admin/apps')).body.find((a) => a.key === 'recados').voice_fields), ['solicitante', 'telefono']);
+  await admin.call('PUT', `/admin/apps/${rec.id}`, { voice_fields: JSON.parse(rec.voice_fields) });
+  // un recado recogido por el asistente se guarda como cualquier otro
+  const r = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Recoger paquete', solicitante: 'Juana Pérez', direccion: 'C/ Mayor 5', telefono: '612345678', email: 'juana@ejemplo.com', descripcion: 'Recoger paquete', fecha_limite: '2026-12-15', estado: 'Pendiente' } });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.data.solicitante, 'Juana Pérez');
+});

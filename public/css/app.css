@@ -460,3 +460,21 @@ html[data-contrast="1"] .muted { color: #1f1f1f !important; }
 html[data-contrast="1"] tr.closed td { opacity: 1 !important; }
 html[data-contrast="1"] .chip, html[data-contrast="1"] .chip.opt { color: #000 !important; border: 1px solid #000 !important; }
 html[data-contrast="1"] .due.over { color: #b00000 !important; font-weight: 700; }
+
+/* ---------- asistente por voz ---------- */
+.voice { padding: 22px; max-width: 820px; font-size: 1.15rem; }
+.voice-progress { margin: 0 0 6px; color: var(--muted); font-weight: 600; font-size: .95rem; }
+.voice-q { display: block; font-size: 1.45rem; font-weight: 700; line-height: 1.35; margin: 0 0 14px; }
+.voice-input { width: 100%; font-size: 1.5rem !important; padding: 14px 16px !important; min-height: 60px; border-width: 2px !important; }
+textarea.voice-input { min-height: 120px; }
+.voice-error { color: var(--danger); font-weight: 700; min-height: 1.2em; margin: 8px 0 0; }
+.voice-error:empty { display: none; }
+.voice-hint { color: var(--muted); margin: 10px 0 0; }
+.voice-hint:empty { display: none; }
+.voice-btns { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; align-items: center; }
+.voice-btns .btn, .voice-start { font-size: 1.05rem; padding: 12px 18px; min-height: 48px; }
+.voice-summary { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 6px; }
+.voice-summary .btn { width: 100%; justify-content: flex-start; text-align: left; font-size: 1.1rem; white-space: normal; }
+.voice-ok { color: var(--ok); }
+.voice-opts { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); }
+.voice-opts select { width: auto; }

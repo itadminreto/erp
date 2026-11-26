@@ -2,6 +2,7 @@
 import { api, h, clear, toast, toastErr, state, modal, announce } from './core.js';
 import { startA11y, getPrefs, setPrefs } from './a11y.js';
 import { renderApp } from './records.js';
+import { renderVoice } from './voice.js';
 import { renderCompanies, renderCenters, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit, renderFormDesigner } from './admin.js';
 
 const root = document.getElementById('root');
@@ -101,6 +102,7 @@ function drawNav() {
   };
   clear(nav,
     link('#/', '🏠', 'Inicio'),
+    voiceApps().length ? [h('div.section', { role: 'heading', 'aria-level': '2' }, 'Asistente por voz'), voiceApps().map((a) => link('#/voz/' + a.key, '📞', `Recoger · ${a.name}`))] : null,
     state.apps.length ? h('div.section', { role: 'heading', 'aria-level': '2' }, 'Aplicaciones') : null,
     state.apps.map((a) => link('#/app/' + a.key, a.icon || '📁', a.name, a.count, a.color)),
     state.me.is_superadmin ? [h('div.section', { role: 'heading', 'aria-level': '2' }, 'Super admin'),
@@ -115,6 +117,8 @@ async function route() {
   const name = h1 ? h1.textContent.trim() : '';
   document.title = name ? `${name} · ${state.me.app_name}` : state.me.app_name;
   if (firstRoute) { firstRoute = false; return; }
+  const act = document.activeElement;
+  if (act && act !== content && content.contains(act)) return; // la pantalla ya colocó el foco (p. ej. el asistente)
   if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } else content.focus({ preventScroll: true });
 }
 async function routeInner() {
@@ -124,6 +128,7 @@ async function routeInner() {
   clear(content, h('p.muted', { role: 'status' }, 'Cargando…'));
   try {
     if (a === 'app' && b) return await renderApp(content, b, refreshApps);
+    if (a === 'voz' && b) return await renderVoice(content, b);
     if (a === 'admin' && state.me.is_superadmin) {
       const refreshAll = async () => { state.me = await api('/me'); buildShell(); await refreshApps(); route(); };
       const views = { companies: () => renderCompanies(content, refreshAll), centers: () => renderCenters(content), users: () => renderUsers(content), roles: () => renderRoles(content),
@@ -134,10 +139,17 @@ async function routeInner() {
   } catch (e) { clear(content, h('div.empty', h('div.big', '⚠️'), h('p', e.message))); }
 }
 
+/** Apps con asistente por voz que puede usar este usuario (solo usuarios marcados como invidentes). */
+function voiceApps() {
+  if (!state.me.accessible) return [];
+  return state.apps.filter((a) => a.voice_fields && a.voice_fields !== '[]' && a.perms && a.perms.create);
+}
+
 function renderHome() {
   const company = state.me.companies.find((c) => c.id === state.companyId);
   clear(content,
     h('div.page-head', h('div.title', h('div', h('h1', `Hola, ${state.me.name.split(' ')[0]}`), h('div.muted', company ? company.name : 'Sin empresa asignada')))),
+    voiceApps().length ? h('div.row', { style: { marginBottom: '16px' } }, voiceApps().map((a) => h('a.btn.primary.voice-start', { href: '#/voz/' + a.key }, `📞 Recoger ${a.name.toLowerCase()} por voz`))) : null,
     state.apps.length ? h('div.grid-cards', state.apps.map((a) => h('a.card.app-card', { href: '#/app/' + a.key },
       h('div.top', h('div.app-ico', { style: { width: '44px', height: '44px', borderRadius: '12px', display: 'grid', placeItems: 'center', fontSize: '22px', background: a.color + '22' } }, a.icon), h('span.big', a.count)),
       h('div', h('h2', a.name), h('div.muted.small', a.description || '')), homeStats(a)))) :

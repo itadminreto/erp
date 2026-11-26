@@ -297,7 +297,8 @@ export async function renderAppsAdmin(root, onChange) {
       h('div.row', h('div.app-ico', { style: { width: '42px', height: '42px', borderRadius: '11px', display: 'grid', placeItems: 'center', fontSize: '22px', background: a.color + '22' } }, a.icon),
         h('div', { style: { flex: 1 } }, h('h2', a.name), h('div.muted.small', `clave: ${a.key} · ${a.description || ''}`)),
         h('a.btn', { href: `#/admin/design/${a.id}` }, '🎨 Diseñar formulario'),
-        h('button.btn', { onclick: () => editApp(a) }, '⚙ Propiedades')),
+        h('button.btn', { onclick: () => editApp(a) }, '⚙ Propiedades'),
+        a.voice_fields && a.voice_fields !== '[]' ? h('a.btn', { href: '#/voz/' + a.key, title: 'Probar el asistente por voz para usuarios invidentes' }, '📞 Probar asistente') : null),
       h('div.row', h('h3', { style: { flex: 1 } }, 'Campos'), h('button.btn.primary.sm', { onclick: () => editField(target, null) }, '＋ Añadir campo')),
       fieldsList,
       h('p.muted.small', 'Los campos no se borran: se desactivan para conservar los datos históricos. La clave interna no cambia aunque modifiques la etiqueta.')));
@@ -308,6 +309,7 @@ export async function renderAppsAdmin(root, onChange) {
     if (!v.key) v.key = v.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     try { const r = await api('/admin/apps', { method: 'POST', body: v }); current = r.id; toast('Aplicación creada. Recuerda darle permisos en Roles.', 'ok'); reload(); } catch (e) { toastErr(e); }
   }
+  const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'user', 'checkbox'];
   async function editApp(a) {
     const v = await promptDlg(`Propiedades · ${a.name}`, [
       { key: 'name', label: 'Nombre', value: a.name }, { key: 'icon', label: 'Icono (emoji)', value: a.icon }, { key: 'color', label: 'Color', type: 'color', value: a.color },
@@ -317,6 +319,10 @@ export async function renderAppsAdmin(root, onChange) {
       { key: 'closed_values', label: 'Valores del estado que cierran el registro', value: (() => { try { return JSON.parse(a.closed_values || '[]').join(', '); } catch { return ''; } })(), placeholder: 'Hecho, Cancelado', help: 'Separados por comas. Los registros cerrados no avisan de vencimiento y salen atenuados.' },
       { key: 'owner_field', label: 'Campo responsable (para «Míos»)', type: 'select', value: a.owner_field || '', options: [{ value: '', label: '— Ninguno —' }, ...a.fields.filter((f) => f.type === 'user').map((f) => ({ value: f.key, label: f.label }))] },
       { key: 'number_start', label: 'Numeración: empieza en', type: 'number', value: a.number_start ?? 1000, help: 'Primer número de registro (Nº de trabajo). Si ya hay números mayores, se sigue desde el último.' },
+      { key: 'voice_fields', label: 'Asistente por voz (usuarios invidentes): preguntas', type: 'multiselect',
+        value: (() => { try { return JSON.parse(a.voice_fields || '[]'); } catch { return []; } })(),
+        options: a.fields.filter((f) => VOICE_TYPES.includes(f.type)).map((f) => ({ value: f.key, label: f.label })),
+        help: 'Ctrl+clic para marcar varias. Se preguntan en el orden de los campos. Ninguna = sin asistente. Lo ven los usuarios marcados como invidentes (menú «Recoger»).' },
       { key: 'calendar', label: 'Vista calendario (necesita algún campo de fecha)', type: 'checkbox', value: !!a.calendar },
       { key: 'active', label: 'Aplicación activa', type: 'checkbox', value: !!a.active }]);
     if (!v) return;

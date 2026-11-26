@@ -116,6 +116,16 @@ La pantalla de acceso es accesible para todos (aún no se sabe quién entra).
 - Menú de usuario → **♿ Accesibilidad**: tamaño de texto (hasta 150 %), alto contraste, subrayar enlaces y quitar animaciones
   (se guarda en cada navegador). El código está en `public/js/a11y.js` y se aplica solo a las pantallas nuevas.
 
+### Asistente por voz («Recoger · Recados»)
+
+Para los usuarios marcados como invidentes aparece en el menú **📞 Recoger · Recados**: una pregunta cada vez,
+leída en voz alta por el navegador (Dirección, Solicitante, Teléfono, Email, Descripción y Fecha límite).
+Se contesta escribiendo o dictando (dictado de Windows: tecla Windows + H; botón 🎤 solo con HTTPS) y se pulsa Intro.
+Entiende fechas como «hoy», «mañana», «el lunes», «dentro de 3 días» o «15 de diciembre»; repite teléfono y email
+cifra a cifra; Esc vuelve atrás, F2 repite la pregunta; al final lee un resumen (un número corrige ese dato) e Intro guarda.
+Qué campos pregunta cada app se configura en **Apps y campos → Propiedades → Asistente por voz**.
+Si el usuario ya usa NVDA/JAWS, puede desmarcar «Leer en voz alta» para que no hablen los dos a la vez.
+
 ## Estructura
 
 ```

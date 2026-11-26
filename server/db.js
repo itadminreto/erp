@@ -311,6 +311,30 @@ async function init() {
     }
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_status_v1', '1')");
   }
+  // Asistente por voz (usuarios invidentes): campos que pregunta, en orden
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS voice_fields TEXT NULL');
+  // Recogida de recados: dirección, teléfono y email; el solicitante pasa a texto libre (persona de fuera),
+  // conservando como nombre los usuarios que ya estuvieran puestos. Una sola vez.
+  const rcDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_contact_v1'");
+  if (!rcDone.length) {
+    const [rec] = await pool.query("SELECT id FROM apps WHERE `key` = 'recados'");
+    if (rec) {
+      const add = [['direccion', 'Dirección', 'text', 'lg'], ['telefono', 'Teléfono', 'phone', 'sm'], ['email', 'Email', 'email', 'md']];
+      for (const [k, l, t, w] of add) {
+        await pool.query('INSERT IGNORE INTO fields (app_id, `key`, label, type, width, sort, show_in_list) VALUES (?,?,?,?,?,2,?)', [rec.id, k, l, t, w, k === 'email' ? 0 : 1]);
+      }
+      const [sol] = await pool.query("SELECT id, type FROM fields WHERE app_id = ? AND `key` = 'solicitante'", [rec.id]);
+      if (sol && sol.type === 'user') {
+        await pool.query(`UPDATE records r JOIN users u ON u.id = CAST(JSON_VALUE(r.data, '$.solicitante') AS UNSIGNED)
+          SET r.data = JSON_SET(r.data, '$.solicitante', u.name)
+          WHERE r.app_id = ? AND JSON_VALUE(r.data, '$.solicitante') REGEXP '^[0-9]+$'`, [rec.id]);
+        await pool.query("UPDATE fields SET type = 'text', width = 'md' WHERE id = ?", [sol.id]);
+      }
+      await pool.query(`UPDATE apps SET voice_fields = ? WHERE id = ? AND voice_fields IS NULL`,
+        [JSON.stringify(['direccion', 'solicitante', 'telefono', 'email', 'descripcion', 'fecha_limite']), rec.id]);
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_contact_v1', '1')");
+  }
   // «IP fija» de Fibras pasa al nuevo tipo «Dirección IP» (una sola vez)
   const ipDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_ip_type_v1'");
   if (!ipDone.length) {
