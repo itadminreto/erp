@@ -51,7 +51,7 @@ const CSS = `
   .box { border: 1px solid #c9ced6; border-radius: 4px; padding: 3px 7px 5px; min-height: 11mm; page-break-inside: avoid; }
   .box .l { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; }
   .box .v { font-size: 10pt; white-space: pre-wrap; word-break: break-word; min-height: 12pt; }
-  .box .v.empty { color: #c0c4cc; }
+  .box .v.nil { color: #c0c4cc; }
   .s2 { grid-column: span 2; } .s3 { grid-column: span 3; } .s4 { grid-column: span 4; } .s6 { grid-column: span 6; } .s8 { grid-column: span 8; } .s12 { grid-column: span 12; }
   .pics { display: grid; grid-template-columns: repeat(auto-fill, minmax(38mm, 1fr)); gap: 4px; margin-top: 3px; }
   .pics img { width: 100%; max-height: 60mm; object-fit: contain; border: 1px solid #e5e7eb; border-radius: 3px; background: #fafafa; }
@@ -66,29 +66,98 @@ const CSS = `
 `;
 
 /** Imprime `bodyHtml` (HTML ya escapado) con cabecera corporativa. */
-export function printDoc({ title, subtitle = '', bodyHtml, landscape = false, bare = false }) {
+/** HTML completo del documento (cabecera corporativa opcional + cuerpo), el mismo para imprimir y para PDF. */
+/** Contenido del documento: cabecera corporativa (salvo `bare`) + cuerpo. */
+function docInner({ title, subtitle = '', bodyHtml, bare = false }) {
   const company = (state.me.companies || []).find((c) => c.id === state.companyId);
   const logo = company && company.has_logo ? `<img src="/api/companies/${company.id}/logo" alt="">` : '';
-  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title>
-    <style>${CSS.replace('PORTRAIT', landscape ? 'landscape' : 'portrait')}</style></head><body>
-    ${bare ? '' : `<header>${logo}<div class="t"><h1>${esc(title)}</h1><div class="sub">${esc(company ? company.name : '')}${subtitle ? ' · ' + esc(subtitle) : ''}</div></div>
+  return `${bare ? '' : `<header>${logo}<div class="t"><h1>${esc(title)}</h1><div class="sub">${esc(company ? company.name : '')}${subtitle ? ' · ' + esc(subtitle) : ''}</div></div>
     <div class="meta">${esc(fmtDateTime(new Date().toISOString()))}<br>${esc(state.me.name)}</div></header>`}
-    ${bodyHtml}
-    </body></html>`;
-  const frame = document.createElement('iframe');
-  frame.setAttribute('aria-hidden', 'true');
-  Object.assign(frame.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
-  document.body.append(frame);
-  const doc = frame.contentDocument;
-  doc.open(); doc.write(html); doc.close();
-  const go = () => {
-    frame.contentWindow.focus();
-    frame.contentWindow.print();
-    setTimeout(() => frame.remove(), 60e3);
-  };
-  const imgs = [...doc.images];
-  if (!imgs.length) return setTimeout(go, 50);
-  let pending = imgs.length;
-  const done = () => { if (--pending === 0) go(); };
-  imgs.forEach((i) => (i.complete ? done() : (i.onload = i.onerror = done)));
+    ${bodyHtml}`;
 }
+
+/** HTML completo del documento, el mismo para imprimir y (con los estilos aislados) para PDF. */
+export function docHtml(opts) {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(opts.title)}</title>
+    <style>${CSS.replace('PORTRAIT', opts.landscape ? 'landscape' : 'portrait')}</style></head><body>${docInner(opts)}</body></html>`;
+}
+
+/**
+ * Los mismos estilos de impresión, limitados a un contenedor `.erp-doc` para generar el PDF dentro de la
+ * página sin que se mezclen con los estilos de la aplicación.
+ */
+const SCOPED_CSS = (() => {
+  const out = [];
+  for (const chunk of CSS.split('}')) {
+    const i = chunk.indexOf('{');
+    if (i < 0) continue;
+    const sel = chunk.slice(0, i).trim(), decl = chunk.slice(i + 1);
+    if (!sel || sel.startsWith('@') || sel.startsWith('/*')) continue;
+    const scoped = sel.split(',').map((x) => {
+      x = x.trim().replace(/^\/\*.*?\*\/\s*/s, '');
+      return x === 'body' ? '.erp-doc' : x === '*' ? '.erp-doc, .erp-doc *' : `.erp-doc ${x}`;
+    }).join(', ');
+    out.push(`${scoped} {${decl}}`);
+  }
+  return out.join('\n') + '\n.erp-doc { background: #fff; color: #111; } .erp-doc img { max-width: 100%; }';
+})();
+
+/** Escribe el documento en un iframe oculto y espera a que carguen las imágenes (logo, fotos, firmas). */
+function loadFrame(html) {
+  return new Promise((resolve) => {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    Object.assign(frame.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
+    document.body.append(frame);
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(html); doc.close();
+    const imgs = [...doc.images];
+    if (!imgs.length) return setTimeout(() => resolve(frame), 50);
+    let pending = imgs.length;
+    const done = () => { if (--pending === 0) resolve(frame); };
+    imgs.forEach((i) => (i.complete ? done() : (i.onload = i.onerror = done)));
+  });
+}
+
+export async function printDoc(opts) {
+  const frame = await loadFrame(docHtml(opts));
+  frame.contentWindow.focus();
+  frame.contentWindow.print();
+  setTimeout(() => frame.remove(), 60e3);
+}
+
+let pdfLib = null;
+const loadPdfLib = () => pdfLib || (pdfLib = new Promise((ok, ko) => {
+  const sc = document.createElement('script');
+  sc.src = '/vendor/html2pdf.bundle.min.js';
+  sc.onload = () => ok(window.html2pdf); sc.onerror = () => { pdfLib = null; ko(new Error('No se pudo cargar el generador de PDF')); };
+  document.head.append(sc);
+}));
+
+/**
+ * Genera el PDF (A4) del mismo documento que se imprime (mismos estilos, aislados en `.erp-doc`). Devuelve un Blob.
+ */
+export async function docPdf(opts) {
+  const html2pdf = await loadPdfLib();
+  const el = document.createElement('div');
+  el.className = 'erp-doc';
+  el.innerHTML = `<style>${SCOPED_CSS}</style>${docInner(opts)}`;
+  // espera a que carguen logo, fotos y firmas
+  await Promise.all([...el.querySelectorAll('img')].map((i) => (i.complete ? null : new Promise((ok) => { i.onload = i.onerror = ok; }))));
+  {
+    return await html2pdf().set({
+      margin: [14, 12, 14, 12],
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: opts.landscape ? 'landscape' : 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'], avoid: ['.box', '.sig', '.sec-h', 'tr'] },
+    }).from(el).outputPdf('blob');
+  }
+}
+
+/** Blob → base64 (sin el prefijo data:). */
+export const blobToBase64 = (blob) => new Promise((ok, ko) => {
+  const r = new FileReader();
+  r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => ko(r.error);
+  r.readAsDataURL(blob);
+});

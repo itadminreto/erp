@@ -423,6 +423,7 @@ function cleanButton(b, byKey) {
     if (!out.to_field && !out.to_fixed) throw httpError(400, `Botón «${out.label}»: indica a quién se envía el correo`);
     out.subject = str(b.subject, 200) || '{app} Nº {numero}';
     out.body = String(b.body ?? '').slice(0, 4000);
+    out.attach_pdf = b.attach_pdf !== false; // adjuntar el parte en PDF (por defecto sí)
   }
   return out;
 }

@@ -21,6 +21,7 @@
     "bcryptjs": "^3.0.3",
     "exceljs": "^4.4.0",
     "express": "^4.22.3",
+    "html2pdf.js": "^0.14.0",
     "mariadb": "^3.5.5",
     "multer": "^2.5.0",
     "nodemailer": "^10.6.1",
@@ -29,5 +30,9 @@
   "private": true,
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "mailparser": "^3.15.0",
+    "smtp-server": "^3.21.7"
   }
 }

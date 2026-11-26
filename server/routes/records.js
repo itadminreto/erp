@@ -440,9 +440,18 @@ router.post('/:appKey/records/:id/action/:bid', wrap(async (req, res) => {
   const body = (await renderTemplate(req, rec, b.body))
     || req.fields.filter((f) => !['password', 'signature', 'image'].includes(f.type))
       .map((f) => `${f.label}: ${toText(f, data[f.key], {}) || '—'}`).join('\n');
-  await sendMail({ to, subject, text: body });
+  // PDF del parte generado en el navegador con el mismo diseño que la impresión
+  const attachments = [];
+  const pdf = (req.body || {}).pdf;
+  if (b.attach_pdf !== false && pdf) {
+    const buf = Buffer.from(String(pdf).replace(/^data:application\/pdf;base64,/, ''), 'base64');
+    if (buf.subarray(0, 5).toString() !== '%PDF-' || buf.length > 15 * 1024 * 1024) throw httpError(400, 'El PDF del parte no es válido');
+    const fname = `${req.appDef.name}_${rec.number}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9_-]+/g, '_') + '.pdf';
+    attachments.push({ filename: fname, content: buf, contentType: 'application/pdf' });
+  }
+  await sendMail({ to, subject, text: body, attachments });
   await audit(req, { entity: 'record', entityId: rec.id, action: 'email', appId: req.appDef.id, companyId: req.companyId,
-    summary: `Correo «${b.label}» enviado a ${to}` });
+    summary: `Correo «${b.label}» enviado a ${to}${attachments.length ? ` con el parte en PDF (${attachments[0].filename})` : ''}` });
   res.json({ ok: true, to });
 }));
 

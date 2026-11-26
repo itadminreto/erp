@@ -637,6 +637,7 @@ export async function renderFormDesigner(root, appId) {
       const toField = h('select', fieldOpts((f) => f.type === 'email', '— Ninguno —')); toField.value = b.to_field || '';
       const toFixed = h('input', { value: b.to_fixed || '', placeholder: 'jefe@empresa.com, oficina@empresa.com' });
       const subject = h('input', { value: b.subject || '{app} Nº {numero}' });
+      const attachPdf = h('input', { type: 'checkbox', checked: b.attach_pdf !== false });
       const body = h('textarea', { value: b.body || '', placeholder: 'Vacío = se envían todos los datos del registro.\nEj.: Hola, el trabajo {numero} ({titulo}) está terminado.' });
       // condición
       const cField = h('select', fieldOpts(() => true, '— Mostrar siempre —')); cField.value = b.condition ? b.condition.field : '';
@@ -648,7 +649,8 @@ export async function renderFormDesigner(root, appId) {
         set_fields: h('div.stack', h('label.small.muted', 'Campos que rellena'), setsBox, h('div', h('button.btn.sm', { type: 'button', onclick: () => addSet() }, '＋ Otro campo')), h('label.check', save, 'Guardar el registro después')),
         open_url: h('div.stack', h('div.field', h('label', 'Enlace'), url), presets),
         email: h('div.stack', h('div.two-col', h('div.field', h('label', 'Enviar al email del campo'), toField), h('div.field', h('label', 'y/o a estas direcciones'), toFixed)),
-          h('div.field', h('label', 'Asunto'), subject), h('div.field', h('label', 'Texto'), body), h('p.help', 'Necesita el correo saliente (SMTP) configurado en Ajustes.')),
+          h('div.field', h('label', 'Asunto'), subject), h('div.field', h('label', 'Texto'), body),
+          h('label.check', attachPdf, 'Adjuntar el parte en PDF (igual que el impreso)'), h('p.help', 'Necesita el correo saliente (SMTP) configurado en Ajustes.')),
         print: h('p.muted', 'Imprime el parte del registro (debe estar guardado).'),
         duplicate: h('p.muted', 'Abre un registro nuevo con los mismos datos (sin fotos, firmas ni contraseñas).'),
       };
@@ -671,7 +673,7 @@ export async function renderFormDesigner(root, appId) {
           if (action.value === 'open_url' && !/^(https?:\/\/|tel:|mailto:|sms:)/i.test(url.value.trim())) return toast('El enlace debe empezar por https://, tel:, mailto: o sms:', 'error');
           if (action.value === 'email' && !toField.value && !toFixed.value.trim()) return toast('Indica a quién se envía', 'error');
           Object.assign(b, { label: label.value.trim(), icon: icon.value.trim(), color: color.value, action: action.value, confirm: confirmTxt.value.trim(),
-            sets, save: save.checked, url: url.value.trim(), to_field: toField.value, to_fixed: toFixed.value.trim(), subject: subject.value, body: body.value,
+            sets, save: save.checked, url: url.value.trim(), to_field: toField.value, to_fixed: toFixed.value.trim(), subject: subject.value, body: body.value, attach_pdf: attachPdf.checked,
             condition: cField.value ? { field: cField.value, op: cOp.value, value: cVal.value } : undefined });
           accepted = true; m.close();
         } }, 'Aceptar')],

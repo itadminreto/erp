@@ -14,7 +14,7 @@ async function publicUrl(req) {
   return `${req.protocol}://${req.get('host')}`;
 }
 
-async function sendMail({ to, subject, text }) {
+async function sendMail({ to, subject, text, attachments }) {
   const S = {};
   for (const k of ['smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass', 'smtp_from']) S[k] = await getSetting(k);
   const host = S.smtp_host || process.env.SMTP_HOST;
@@ -29,7 +29,7 @@ async function sendMail({ to, subject, text }) {
   });
   const from = S.smtp_from || process.env.SMTP_FROM || S.smtp_user || process.env.SMTP_USER;
   try {
-    await transport.sendMail({ from, to, subject, text });
+    await transport.sendMail({ from, to, subject, text, attachments });
   } catch (e) {
     throw Object.assign(new Error('No se pudo enviar el correo: ' + e.message), { status: 502 });
   }

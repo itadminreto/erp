@@ -126,6 +126,7 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada'
 
 // ---------- frontend ----------
 app.use('/vendor/sortable.min.js', (req, res) => res.sendFile(require.resolve('sortablejs/Sortable.min.js')));
+app.use('/vendor/html2pdf.bundle.min.js', (req, res) => res.sendFile(path.join(path.dirname(require.resolve('html2pdf.js/package.json')), 'dist', 'html2pdf.bundle.min.js')));
 app.use(express.static(path.join(__dirname, '..', 'public'), { index: 'index.html' }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 

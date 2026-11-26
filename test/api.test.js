@@ -483,3 +483,39 @@ test('botones de acción en el diseño: validación y acción de correo', async 
   // vuelve a dejar el diseño sin botones para el resto de pruebas
   await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items });
 });
+
+test('botón de correo: envía el parte en PDF como adjunto (SMTP de pruebas)', async () => {
+  const { SMTPServer } = require('smtp-server');
+  const { simpleParser } = require('mailparser');
+  const received = [];
+  const smtp = new SMTPServer({ authOptional: true, disabledCommands: ['STARTTLS'], onData(stream, s, cb) { simpleParser(stream).then((m) => { received.push(m); cb(); }, cb); } });
+  await new Promise((ok) => smtp.listen(0, '127.0.0.1', ok));
+  try {
+    await admin.call('PUT', '/admin/settings', { smtp_host: '127.0.0.1', smtp_port: String(smtp.server.address().port), smtp_user: '', smtp_from: 'partes@test.com', smtp_secure: '0' });
+    const apps = (await admin.call('GET', '/admin/apps')).body;
+    const rec = apps.find((a) => a.key === 'recados');
+    const items = rec.fields.map((f) => f.key);
+    await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items: [...items,
+      { button: { id: 'mailpdf1', label: 'Enviar parte', action: 'email', to_fixed: 'cliente@test.com', subject: 'Parte Nº {numero}', body: 'Adjunto el parte {titulo}', attach_pdf: true } }] });
+    const r = await admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: 'Parte con PDF' } });
+    const pdf = Buffer.from('%PDF-1.4\n% prueba\n%%EOF').toString('base64');
+    const s = await admin.call('POST', `/apps/recados/records/${r.body.id}/action/mailpdf1`, { pdf });
+    assert.equal(s.status, 200);
+    await new Promise((ok) => setTimeout(ok, 300));
+    const m = received.pop();
+    assert.equal(m.subject, `Parte Nº ${r.body.number}`);
+    assert.match(m.text, /Adjunto el parte Parte con PDF/);
+    assert.equal(m.attachments.length, 1);
+    assert.equal(m.attachments[0].filename, `Recados_${r.body.number}.pdf`);
+    assert.equal(m.attachments[0].contentType, 'application/pdf');
+    // un adjunto que no es PDF se rechaza
+    const bad = await admin.call('POST', `/apps/recados/records/${r.body.id}/action/mailpdf1`, { pdf: Buffer.from('<html>').toString('base64') });
+    assert.equal(bad.status, 400);
+    const h = await admin.call('GET', `/apps/recados/records/${r.body.id}/history`);
+    assert.ok(h.body.some((x) => x.action === 'email' && /PDF/.test(x.summary)), 'queda en el historial');
+    await admin.call('PUT', `/admin/apps/${rec.id}/design`, { items });
+  } finally {
+    await admin.call('PUT', '/admin/settings', { smtp_host: '' });
+    await new Promise((ok) => smtp.close(ok));
+  }
+});

@@ -3,7 +3,7 @@ import {
   api, h, clear, toast, toastErr, modal, confirmDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
   genPassword, copy, sortable, ACTION_LABELS, state, ipMask, signaturePad, prepareImage, imageViewer, webcamPhoto, canUseWebcam,
 } from './core.js';
-import { printDoc, esc } from './print.js';
+import { printDoc, docPdf, blobToBase64, esc } from './print.js';
 
 const MASK = '••••••••';
 const META_COLS = {
@@ -150,12 +150,23 @@ export async function renderApp(root, key, onCountsChanged) {
     } catch (e) { toastErr(e); }
   }
   /** Parte / ficha imprimible: cabecera con empresa y Nº, campos en recuadros según el diseño y casillas de firma. */
-  function printRecord(rec) {
+  function printRecord(rec) { printDoc(parteDoc(rec)); }
+  const parteFilename = (rec) => `${meta.app.name}_${rec.number}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9_-]+/g, '_') + '.pdf';
+  /** Descarga el parte en PDF (idéntico al impreso). */
+  async function downloadPdf(rec) {
+    toast('Generando PDF…');
+    try {
+      const blob = await docPdf(parteDoc(rec));
+      const a = h('a', { href: URL.createObjectURL(blob), download: parteFilename(rec) });
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e) { toastErr(e); }
+  }
+  function parteDoc(rec) {
     const company = (state.me.companies || []).find((c) => c.id === state.companyId) || {};
     const SPAN = { xs: 2, sm: 3, md: 4, lg: 6, xl: 8, full: 12, half: 4, third: 3 };
     const sigFields = meta.fields.filter((f) => f.type === 'signature');
     const box = (label, value, span, rows = 1) => `<div class="box s${span}"${rows > 1 ? ` style="min-height:${11 * rows}mm"` : ''}>
-      <div class="l">${esc(label)}</div><div class="v${value ? '' : ' empty'}">${value ? esc(value) : '—'}</div></div>`;
+      <div class="l">${esc(label)}</div><div class="v${value ? '' : ' nil'}">${value ? esc(value) : '—'}</div></div>`;
     let html = '';
     const groups = formGroups().groups;
     groups.forEach((g, gi) => {
@@ -170,7 +181,7 @@ export async function renderApp(root, key, onCountsChanged) {
           const imgs = Array.isArray(rec.data[k]) ? rec.data[k] : [];
           inner += `<div class="box s${span}"><div class="l">${esc(f.label)}</div>${imgs.length
             ? `<div class="pics">${imgs.map((x) => `<img src="/api/apps/${esc(key)}/records/${rec.id}/files/${x.id}" alt="">`).join('')}</div>`
-            : '<div class="v empty">—</div>'}</div>`;
+            : '<div class="v nil">—</div>'}</div>`;
           continue;
         }
         inner += box(f.label, cellText(rec, k), span, ['textarea', 'multiselect'].includes(f.type) ? (f.height || 1) + (f.type === 'textarea' ? 1 : 0) : 1);
@@ -199,7 +210,7 @@ export async function renderApp(root, key, onCountsChanged) {
       ${sigs ? `<div class="sigs">${sigs}</div>` : ''}
       <div class="doc-foot"><span>${esc(company.name || '')} · ${esc(meta.app.name)} Nº ${esc(rec.number)}</span><span>Impreso el ${esc(fmtDateTime(new Date().toISOString()))} por ${esc(state.me.name)}</span></div>
     </div>`;
-    printDoc({ title: `${meta.app.name} Nº ${rec.number}`, bodyHtml: body, bare: true });
+    return { title: `${meta.app.name} Nº ${rec.number}`, bodyHtml: body, bare: true };
   }
 
   // ----- calendario -----
@@ -552,8 +563,11 @@ export async function renderApp(root, key, onCountsChanged) {
             if (!/^(https?:\/\/|tel:|mailto:|sms:)/i.test(url)) return toast('Enlace no válido', 'error');
             if (/^https?:/i.test(url)) window.open(url, '_blank', 'noopener'); else location.href = url;
           } else if (b.action === 'email') {
-            const r = await api(`/apps/${key}/records/${rec.id}/action/${b.id}`, { method: 'POST' });
-            toast(`Correo enviado a ${r.to}`, 'ok');
+            btn.disabled = true;
+            const body = {};
+            if (b.attach_pdf !== false) { toast('Generando el parte en PDF…'); body.pdf = await blobToBase64(await docPdf(parteDoc(rec))); }
+            const r = await api(`/apps/${key}/records/${rec.id}/action/${b.id}`, { method: 'POST', body });
+            toast(`Correo enviado a ${r.to}${body.pdf ? ' con el parte en PDF' : ''}`, 'ok');
           } else if (b.action === 'print') {
             printRecord(rec);
           } else if (b.action === 'duplicate') {
@@ -565,7 +579,7 @@ export async function renderApp(root, key, onCountsChanged) {
             }
             m.close(); openRecord(null, pre);
           }
-        } catch (e) { toastErr(e); }
+        } catch (e) { toastErr(e); } finally { btn.disabled = !allowed; }
       });
       return h('div.field.btn-cell', { class: 'w-' + (b.width || 'sm'), dataset: { key: 'btn:' + b.id, cond: b.condition ? '1' : '' } }, h('label', '\u00a0'), btn);
     }
@@ -771,7 +785,8 @@ export async function renderApp(root, key, onCountsChanged) {
       if (rec.can.restore) footer.push(h('button.btn.ok', { onclick: () => restoreRec(rec, () => m.close()) }, '↩ Restaurar'));
       if (rec.can.purge) footer.push(h('button.btn.danger', { onclick: () => purgeRec(rec, () => m.close()) }, 'Eliminar definitivamente'));
     } else if (rec && rec.can.delete) footer.push(h('button.btn.danger', { onclick: () => deleteRec(rec, () => m.close()) }, '🗑️ Papelera'));
-    if (rec) footer.push(h('button.btn', { title: 'Imprimir ficha', onclick: () => printRecord(rec) }, '🖨 Imprimir'));
+    if (rec) footer.push(h('button.btn', { title: 'Imprimir ficha', onclick: () => printRecord(rec) }, '🖨 Imprimir'),
+      h('button.btn', { title: 'Descargar el parte en PDF', onclick: () => downloadPdf(rec) }, '⬇ PDF'));
     footer.push(h('div.spacer'), h('button.btn', { onclick: () => m.close() }, editable ? 'Cancelar' : 'Cerrar'));
     if (editable && !(rec && rec.deleted_at)) {
       const saveBtn = h('button.btn.primary', { onclick: async () => {
