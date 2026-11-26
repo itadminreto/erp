@@ -77,6 +77,18 @@ const SCHEMA = [
     deleted_at DATETIME NULL,
     CONSTRAINT fk_centers_company FOREIGN KEY (company_id) REFERENCES companies(id)
   )`,
+  `CREATE TABLE IF NOT EXISTS work_groups (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    center_id INT NOT NULL,
+    code VARCHAR(50), name VARCHAR(200) NOT NULL,
+    notes TEXT,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    extra LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME NULL,
+    KEY ix_work_groups_center (center_id),
+    CONSTRAINT fk_work_groups_center FOREIGN KEY (center_id) REFERENCES centers(id)
+  )`,
   `CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(200) NOT NULL,
@@ -410,7 +422,7 @@ async function nextNumber(appId, companyId) {
 }
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
-const BACKUP_TABLES = ['companies', 'centers', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
+const BACKUP_TABLES = ['companies', 'centers', 'work_groups', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
   'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files'];
 
 const close = () => pool.end();

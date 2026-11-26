@@ -120,6 +120,22 @@ export async function renderCenters(root) {
   });
 }
 
+export async function renderWorkGroups(root) {
+  const centers = await api('/admin/centers');
+  return simpleEntity(root, {
+    title: 'Grupos de trabajo', sub: 'Cada sede (centro) tiene sus grupos de trabajo. Los campos adicionales se añaden en Apps y campos → Datos maestros → Grupos de trabajo.',
+    path: 'work_groups', newLabel: 'Nuevo grupo', entity: 'work_groups',
+    columns: [{ key: 'company_name', label: 'Empresa' }, { label: 'Sede', render: (r) => `${r.center_code ? r.center_code + ' · ' : ''}${r.center_name}` },
+      { key: 'code', label: 'Código' }, { key: 'name', label: 'Nombre' },
+      { label: 'Estado', render: (r) => h('span.chip', { class: r.active ? 'ok' : '' }, r.active ? 'Activo' : 'Inactivo') }],
+    form: [
+      { key: 'center_id', label: 'Sede (centro) *', type: 'select', value: centers[0] && centers[0].id,
+        options: centers.map((c) => ({ value: c.id, label: `${c.company_name} › ${c.code ? c.code + ' · ' : ''}${c.name}` })) },
+      { key: 'code', label: 'Código', placeholder: 'G01' }, { key: 'name', label: 'Nombre *' },
+      { key: 'notes', label: 'Notas', type: 'textarea' }, { key: 'active', label: 'Activo', type: 'checkbox', value: true }],
+  });
+}
+
 // ---------- usuarios ----------
 export async function renderUsers(root) {
   const [companies, centers, rolesData] = await Promise.all([api('/admin/companies'), api('/admin/centers'), api('/admin/roles')]);
@@ -235,7 +251,8 @@ export async function renderRoles(root) {
 export async function renderAppsAdmin(root, onChange) {
   const types = await api('/admin/field-types');
   let apps = await api('/admin/apps');
-  const ENT = { companies: { name: 'Empresas', icon: '🏢', desc: 'Datos adicionales de cada empresa' }, centers: { name: 'Centros', icon: '📍', desc: 'Datos adicionales de cada centro de trabajo / coste' } };
+  const ENT = { companies: { name: 'Empresas', icon: '🏢', desc: 'Datos adicionales de cada empresa' }, centers: { name: 'Centros', icon: '📍', desc: 'Datos adicionales de cada centro de trabajo / coste' },
+    work_groups: { name: 'Grupos de trabajo', icon: '🧑‍🤝‍🧑', desc: 'Datos adicionales de cada grupo de trabajo de una sede' } };
   const entFields = {};
   const loadEnt = async () => { for (const e of Object.keys(ENT)) entFields[e] = await api(`/admin/entity-fields/${e}?all=1`); };
   await loadEnt();

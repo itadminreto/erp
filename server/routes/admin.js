@@ -26,9 +26,9 @@ const q = (c) => '`' + c + '`'; // escapa nombres de columna (p. ej. `key`)
 const strip = (r) => { if (r) delete r.logo; return r; };
 
 // ---------- campos dinámicos de empresas y centros ----------
-const ENTITIES = { companies: 'Empresas', centers: 'Centros' };
+const ENTITIES = { companies: 'Empresas', centers: 'Centros', work_groups: 'Grupos de trabajo' };
 // Claves reservadas (columnas fijas) que no pueden usarse como campo dinámico
-const RESERVED = ['id', 'name', 'cif', 'address', 'email', 'phone', 'notes', 'active', 'code', 'kind', 'company_id', 'logo', 'extra', 'created_at', 'deleted_at'];
+const RESERVED = ['id', 'name', 'cif', 'address', 'email', 'phone', 'notes', 'active', 'code', 'kind', 'company_id', 'center_id', 'logo', 'extra', 'created_at', 'deleted_at'];
 const entityFields = async (entity, inactive = false) =>
   (await all(`SELECT * FROM entity_fields WHERE entity = ? ${inactive ? '' : 'AND active = 1'} ORDER BY sort, id`, entity)).map(parseField);
 const parseExtra = (r) => { if (r) { try { r.extra = r.extra ? JSON.parse(r.extra) : {}; } catch { r.extra = {}; } } return r; };
@@ -69,7 +69,7 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
   }));
   router.post(`/${entity}`, wrap(async (req, res) => {
     const data = pick(req.body, cols);
-    validate(data, null);
+    await validate(data, null);
     if (dynamic) data.extra = JSON.stringify(await buildExtra(entity, table, req.body.extra || {}, null));
     const keys = Object.keys(data);
     const id = Number((await run(`INSERT INTO ${table} (${keys.map(q).join(',')}) VALUES (${keys.map(() => '?').join(',')})`, ...keys.map((k) => data[k]))).lastInsertRowid);
@@ -81,7 +81,7 @@ function crud(entity, table, cols, { orderBy = 'id', validate = () => {}, listSq
     const before = await get(`SELECT * FROM ${table} WHERE id = ?`, Number(req.params.id));
     if (!before) throw httpError(404, 'No encontrado');
     const data = pick(req.body, cols);
-    validate(data, before);
+    await validate(data, before);
     let changes = diff(pick(before, Object.keys(data)), data);
     if (dynamic && req.body.extra && typeof req.body.extra === 'object') {
       const extra = await buildExtra(entity, table, req.body.extra, before);
@@ -152,6 +152,21 @@ crud('companies', 'companies', ['name', 'cif', 'address', 'email', 'phone', 'not
   orderBy: 'name',
   listSql: 'SELECT id, name, cif, address, email, phone, notes, active, created_at, deleted_at, extra, (logo IS NOT NULL) has_logo FROM companies',
   validate: (d, before) => { if ((!before || 'name' in d) && !String(d.name || '').trim()) throw httpError(400, 'El nombre es obligatorio'); if ('active' in d) d.active = bool(d.active); },
+});
+crud('work_groups', 'work_groups', ['center_id', 'code', 'name', 'notes', 'active'], {
+  orderBy: 'company_name, center_name, work_groups.name',
+  listSql: `SELECT work_groups.*, centers.name center_name, centers.code center_code, centers.company_id, companies.name company_name
+    FROM work_groups JOIN centers ON centers.id = work_groups.center_id JOIN companies ON companies.id = centers.company_id`,
+  labelOf: (r) => `${r.code ? r.code + ' · ' : ''}${r.name}`,
+  validate: async (d, before) => {
+    if ((!before || 'name' in d) && !String(d.name || '').trim()) throw httpError(400, 'El nombre es obligatorio');
+    if ((!before || 'center_id' in d) && !d.center_id) throw httpError(400, 'La sede (centro) es obligatoria');
+    if ('center_id' in d) {
+      d.center_id = Number(d.center_id);
+      if (!(await get('SELECT id FROM centers WHERE id = ? AND deleted_at IS NULL', d.center_id))) throw httpError(400, 'La sede (centro) no existe');
+    }
+    if ('active' in d) d.active = bool(d.active);
+  },
 });
 crud('centers', 'centers', ['company_id', 'code', 'name', 'kind', 'address', 'notes', 'active'], {
   orderBy: 'company_name, centers.code, centers.name',

@@ -119,12 +119,13 @@ export function promptDlg(title, fields, { ok = 'Guardar' } = {}) {
         : f.type === 'color' ? h('input', { type: 'color', value: f.value || '#64748b' })
         : h('input', { type: f.type || 'text', ...(INPUT[f.type] || {}), value: f.type === 'iban' && f.value ? String(f.value).replace(/(.{4})/g, '$1 ').trim() : (f.value ?? ''), placeholder: f.placeholder || (INPUT[f.type] || {}).placeholder || '' });
       inp.dataset.kind = f.type || 'text';
+      inp.id = 'pf-' + Math.random().toString(36).slice(2, 9);
       if (f.max_length && ['INPUT', 'TEXTAREA'].includes(inp.tagName) && inp.type !== 'checkbox') inp.maxLength = f.max_length;
       if (f.type === 'ip') ipMask(inp);
       inputs[f.key] = inp;
       const full = wide && (f.type === 'textarea' || f.full) ? { gridColumn: '1 / -1' } : {};
       items.push(f.type === 'checkbox' ? h('label.check', { style: { ...full, minHeight: '34px' } }, inp, f.label)
-        : h('div.field', { style: full }, h('label', f.label, f.required ? h('span.req', '*') : null), inp, f.help ? h('div.help', f.help) : null));
+        : h('div.field', { style: full }, h('label', { for: inp.id }, f.label, f.required ? h('span.req', '*') : null), inp, f.help ? h('div.help', f.help) : null));
     }
     const content = wide ? h('div.two-col', { style: { gap: '14px 18px' } }, items) : h('div.stack', items);
     const read = (i) => (i.type === 'checkbox' ? i.checked : i.multiple ? [...i.selectedOptions].map((o) => o.value) : i.value);

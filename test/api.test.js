@@ -618,3 +618,28 @@ test('asistente por voz: configuración por app y Recados con dirección, teléf
   assert.equal(r.status, 201);
   assert.equal(r.body.data.solicitante, 'Juana Pérez');
 });
+
+test('grupos de trabajo por sede con campos dinámicos, papelera y copia de seguridad', async () => {
+  assert.equal((await admin.call('POST', '/admin/work_groups', { name: 'Sin sede' })).status, 400);
+  // campo dinámico propio de los grupos
+  const f = await admin.call('POST', '/admin/entity-fields/work_groups', { label: 'Responsable del grupo', type: 'text', required: true });
+  assert.equal(f.status, 201);
+  assert.equal((await admin.call('POST', '/admin/work_groups', { center_id: ids.c1, name: 'Mantenimiento' })).status, 400, 'campo dinámico obligatorio');
+  const g = await admin.call('POST', '/admin/work_groups', { center_id: ids.c1, code: 'G01', name: 'Mantenimiento', extra: { [f.body.key]: 'Luis' } });
+  assert.equal(g.status, 201);
+  assert.equal(g.body.extra[f.body.key], 'Luis');
+  await admin.call('POST', '/admin/work_groups', { center_id: ids.c2, code: 'G01', name: 'Limpieza', extra: { [f.body.key]: 'Ana' } });
+  const list = (await admin.call('GET', '/admin/work_groups')).body;
+  assert.deepEqual(list.map((x) => [x.center_id, x.name]).sort(), [[ids.c1, 'Mantenimiento'], [ids.c2, 'Limpieza']].sort());
+  assert.ok(list[0].center_name && list[0].company_name);
+  const up = await admin.call('PUT', `/admin/work_groups/${g.body.id}`, { name: 'Mantenimiento general', extra: { [f.body.key]: 'Pedro' } });
+  assert.equal(up.body.extra[f.body.key], 'Pedro');
+  assert.equal((await admin.call('DELETE', `/admin/work_groups/${g.body.id}`)).status, 200);
+  assert.equal((await admin.call('GET', '/admin/work_groups')).body.length, 1);
+  assert.equal((await admin.call('GET', '/admin/work_groups?trash=1')).body.length, 2);
+  await admin.call('POST', `/admin/work_groups/${g.body.id}/restore`);
+  // solo el super admin
+  const ana = client(); await ana.login('ana@test.com', 'anapass123');
+  assert.equal((await ana.call('GET', '/admin/work_groups')).status, 403);
+  await admin.call('PUT', `/admin/entity-fields/work_groups/${f.body.id}`, { required: false, active: false });
+});

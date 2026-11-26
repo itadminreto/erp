@@ -102,6 +102,12 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 | **Responsive e intuitivo** | Menú lateral plegable, tablas que pasan a tarjetas en móvil, formularios a pantalla completa en móvil, tema claro/oscuro. |
 | **Datos generales (super admin)** | Empresas, centros, usuarios, roles, aplicaciones/campos y ajustes (nombre, URL pública, SMTP). |
 
+## Grupos de trabajo por sede
+
+**Super admin → Grupos de trabajo**: cada grupo pertenece a una sede (centro) y tiene código, nombre, notas y estado,
+con papelera, auditoría y copia de seguridad como el resto. Sus campos adicionales se crean sin programar en
+**Apps y campos → Datos maestros → Grupos de trabajo** (igual que en Empresas y Centros).
+
 ## Accesibilidad (usuarios invidentes o con baja visión)
 
 Solo para los usuarios marcados en **Usuarios → ♿ Usuario invidente (modo accesible)**; el resto ve la aplicación igual que siempre.

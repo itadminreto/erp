@@ -3,7 +3,7 @@ import { api, h, clear, toast, toastErr, state, modal, announce } from './core.j
 import { startA11y, getPrefs, setPrefs } from './a11y.js';
 import { renderApp } from './records.js';
 import { renderVoice } from './voice.js';
-import { renderCompanies, renderCenters, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit, renderFormDesigner } from './admin.js';
+import { renderCompanies, renderCenters, renderWorkGroups, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit, renderFormDesigner } from './admin.js';
 
 const root = document.getElementById('root');
 let shell = null, nav = null, content = null;
@@ -106,7 +106,7 @@ function drawNav() {
     state.apps.length ? h('div.section', { role: 'heading', 'aria-level': '2' }, 'Aplicaciones') : null,
     state.apps.map((a) => link('#/app/' + a.key, a.icon || '📁', a.name, a.count, a.color)),
     state.me.is_superadmin ? [h('div.section', { role: 'heading', 'aria-level': '2' }, 'Super admin'),
-      link('#/admin/companies', '🏢', 'Empresas'), link('#/admin/centers', '📍', 'Centros'), link('#/admin/users', '👥', 'Usuarios'),
+      link('#/admin/companies', '🏢', 'Empresas'), link('#/admin/centers', '📍', 'Centros'), link('#/admin/groups', '🧑‍🤝‍🧑', 'Grupos de trabajo'), link('#/admin/users', '👥', 'Usuarios'),
       link('#/admin/roles', '🛡️', 'Roles y políticas'), link('#/admin/apps', '🧩', 'Apps y campos'), link('#/admin/audit', '🕘', 'Auditoría'), link('#/admin/settings', '⚙️', 'Ajustes')] : null);
 }
 
@@ -131,7 +131,7 @@ async function routeInner() {
     if (a === 'voz' && b) return await renderVoice(content, b);
     if (a === 'admin' && state.me.is_superadmin) {
       const refreshAll = async () => { state.me = await api('/me'); buildShell(); await refreshApps(); route(); };
-      const views = { companies: () => renderCompanies(content, refreshAll), centers: () => renderCenters(content), users: () => renderUsers(content), roles: () => renderRoles(content),
+      const views = { companies: () => renderCompanies(content, refreshAll), centers: () => renderCenters(content), groups: () => renderWorkGroups(content), users: () => renderUsers(content), roles: () => renderRoles(content),
         apps: () => renderAppsAdmin(content, refreshApps), design: () => renderFormDesigner(content, c), settings: () => renderSettings(content), audit: () => renderAudit(content) };
       if (views[b]) return await views[b]();
     }
