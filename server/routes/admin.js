@@ -592,7 +592,7 @@ router.put('/apps/:id/fields-order', wrap(async (req, res) => {
 // ---------- ajustes ----------
 const SETTINGS = ['public_url', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass', 'smtp_from', 'app_name', 'backup_auto', 'backup_keep',
   'radius_enabled', 'radius_host', 'radius_port', 'radius_host2', 'radius_port2', 'radius_secret', 'radius_timeout', 'radius_retries', 'radius_nas_id', 'radius_user_format', 'radius_fallback',
-  'radius_nas_ip', 'radius_calling_station', 'radius_domain'];
+  'radius_nas_ip', 'radius_calling_station', 'radius_domain', 'session_hours', 'session_idle_minutes'];
 const SECRET_SETTINGS = ['smtp_pass', 'radius_secret'];
 const radius = require('../radius');
 router.get('/settings', wrap(async (req, res) => {
@@ -613,9 +613,12 @@ router.put('/settings', wrap(async (req, res) => {
     if (['radius_port', 'radius_port2'].includes(k) && v && !(Number(v) >= 1 && Number(v) <= 65535)) throw httpError(400, 'Puerto RADIUS no válido');
     if (k === 'radius_nas_ip' && v && !require('net').isIPv4(v)) throw httpError(400, 'NAS-IP-Address debe ser una IPv4 (la del servidor del ERP)');
     if (k === 'radius_domain' && v && !/^[A-Za-z0-9._-]{1,64}$/.test(v)) throw httpError(400, 'Dominio no válido (ej. ASOCIACION)');
+    if (k === 'session_hours' && v && !(Number(v) >= 1 && Number(v) <= 2160)) throw httpError(400, 'Duración de sesión: entre 1 y 2160 horas');
+    if (k === 'session_idle_minutes' && v && !(Number(v) >= 0 && Number(v) <= 1440)) throw httpError(400, 'Inactividad: entre 0 (sin límite) y 1440 minutos');
     await run('INSERT INTO settings (`key`, value) VALUES (?,?) ON DUPLICATE KEY UPDATE value = VALUES(value)', k, v);
     changes.push({ field: k, from: '', to: SECRET_SETTINGS.includes(k) ? '••••' : v });
   }
+  require('../auth').resetSessionConfig();
   const rc = await radius.radiusConfig();
   if (rc.enabled && (!rc.servers.length || !rc.secret)) {
     await run("UPDATE settings SET value = '0' WHERE `key` = 'radius_enabled'");
@@ -624,6 +627,42 @@ router.put('/settings', wrap(async (req, res) => {
   await audit(req, { entity: 'settings', action: 'update', summary: 'Ajustes generales', changes });
   res.json({ ok: true });
 }));
+// ---------- panel del sistema (inicio del super admin) ----------
+const { systemStatus } = require('../system');
+router.get('/system', wrap(async (req, res) => {
+  const s = await systemStatus();
+  s.sessions = s.sessions.map((x) => ({ ...x, current: x.id === req.user.session_id }));
+  const cfg = await require('../auth').sessionConfig();
+  s.session_config = { hours: cfg.hours, idle_minutes: cfg.idle };
+  s.me_id = req.user.id;
+  res.json(s);
+}));
+/** Cierra las sesiones sin actividad en las últimas N horas (por defecto 24). */
+router.delete('/sessions', wrap(async (req, res) => {
+  const hours = Math.min(Math.max(Number(req.query.idle_hours) || 24, 1), 24 * 90);
+  const r = await run(`DELETE FROM sessions WHERE id <> ? AND (COALESCE(last_seen, created_at) IS NULL OR COALESCE(last_seen, created_at) < UTC_TIMESTAMP() - INTERVAL ? HOUR)`,
+    req.user.session_id || 0, hours);
+  await audit(req, { entity: 'users', action: 'logout_forced', summary: `Cerradas ${r.changes} sesiones sin actividad en ${hours} h` });
+  res.json({ ok: true, closed: Number(r.changes || 0) });
+}));
+/** Desconectar: cierra una sesión concreta. */
+router.delete('/sessions/:id', wrap(async (req, res) => {
+  const s = await get('SELECT s.id, s.user_id, s.ip, u.name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?', Number(req.params.id));
+  if (!s) throw httpError(404, 'La sesión ya no existe');
+  await run('DELETE FROM sessions WHERE id = ?', s.id);
+  await audit(req, { entity: 'users', entityId: s.user_id, action: 'logout_forced', summary: `Sesión de ${s.name} cerrada por el administrador${s.ip ? ` (IP ${s.ip})` : ''}` });
+  res.json({ ok: true });
+}));
+/** Desconectar a un usuario de todos sus dispositivos. */
+router.delete('/users/:id/sessions', wrap(async (req, res) => {
+  const u = await get('SELECT id, name FROM users WHERE id = ?', Number(req.params.id));
+  if (!u) throw httpError(404, 'Usuario no encontrado');
+  const keep = u.id === req.user.id ? req.user.session_id : 0; // a uno mismo se le deja la sesión actual
+  const r = await run('DELETE FROM sessions WHERE user_id = ? AND id <> ?', u.id, keep || 0);
+  await audit(req, { entity: 'users', entityId: u.id, action: 'logout_forced', summary: `Todas las sesiones de ${u.name} cerradas por el administrador` });
+  res.json({ ok: true, closed: Number(r.changes ?? r.affectedRows ?? 0) });
+}));
+
 // prueba de RADIUS con los ajustes guardados
 router.post('/settings/test-radius', wrap(async (req, res) => {
   const cfg = await radius.radiusConfig();

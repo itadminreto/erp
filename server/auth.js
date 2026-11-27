@@ -4,7 +4,21 @@ const { all, get, run, sqlDate } = require('./db');
 const { token } = require('./crypto');
 
 const COOKIE = 'erp_session';
-const SESSION_DAYS = 7;
+
+// Duración máxima de la sesión y cierre por inactividad (Ajustes del panel del super admin), con caché de 30 s
+let sessCfg = null, sessCfgAt = 0;
+async function sessionConfig() {
+  if (sessCfg && Date.now() - sessCfgAt < 30e3) return sessCfg;
+  const rows = await all("SELECT `key`, value FROM settings WHERE `key` IN ('session_hours', 'session_idle_minutes')");
+  const s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  sessCfg = {
+    hours: Math.min(Math.max(Number(s.session_hours) || 168, 1), 24 * 90),
+    idle: Math.min(Math.max(Number(s.session_idle_minutes) || 0, 0), 24 * 60),
+  };
+  sessCfgAt = Date.now();
+  return sessCfg;
+}
+const resetSessionConfig = () => { sessCfg = null; };
 
 const PERMS = [
   'view', 'create', 'edit', 'delete', 'view_trash', 'restore', 'purge',
@@ -20,11 +34,13 @@ function parseCookies(header = '') {
   return out;
 }
 
-async function createSession(res, userId) {
+async function createSession(res, userId, req) {
   const t = token();
-  const exp = sqlDate(Date.now() + SESSION_DAYS * 864e5);
-  await run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)', t, userId, exp);
-  res.setHeader('Set-Cookie', `${COOKIE}=${t}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${process.env.COOKIE_SECURE === '1' ? '; Secure' : ''}`);
+  const { hours } = await sessionConfig();
+  const exp = sqlDate(Date.now() + hours * 3600e3);
+  await run(`INSERT INTO sessions (token, user_id, expires_at, created_at, last_seen, ip, user_agent) VALUES (?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?,?)`,
+    t, userId, exp, req ? req.ip : null, req ? String(req.headers['user-agent'] || '').slice(0, 300) : null);
+  res.setHeader('Set-Cookie', `${COOKIE}=${t}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${hours * 3600}${process.env.COOKIE_SECURE === '1' ? '; Secure' : ''}`);
 }
 async function destroySession(req, res) {
   const t = parseCookies(req.headers.cookie)[COOKIE];
@@ -37,10 +53,21 @@ async function loadUser(req, _res, next) {
   try {
     const t = parseCookies(req.headers.cookie)[COOKIE];
     if (t) {
-      const row = await get(
-        `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+      let row = await get(
+        `SELECT u.*, s.id session_id, TIMESTAMPDIFF(SECOND, COALESCE(s.last_seen, s.created_at, UTC_TIMESTAMP()), UTC_TIMESTAMP()) session_idle_s
+         FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token = ? AND s.expires_at > UTC_TIMESTAMP() AND u.active = 1 AND u.deleted_at IS NULL`, t);
       if (row) {
+        const { idle } = await sessionConfig();
+        if (idle && row.session_idle_s > idle * 60) { // cierre por inactividad
+          await run('DELETE FROM sessions WHERE token = ?', t);
+          row = null;
+        } else if (row.session_idle_s >= 60) { // última actividad (como mucho una escritura por minuto)
+          await run('UPDATE sessions SET last_seen = UTC_TIMESTAMP(), ip = ? WHERE token = ?', req.ip, t);
+        }
+      }
+      if (row) {
+        delete row.session_idle_s;
         req.user = row;
         req.user.is_superadmin = !!row.is_superadmin;
         const companies = await userCompanies(row);
@@ -126,6 +153,6 @@ const hash = (p) => bcrypt.hashSync(p, 10);
 const verify = (p, h) => !!h && bcrypt.compareSync(p, h);
 
 module.exports = {
-  PERMS, loadUser, requireAuth, requireSuper, createSession, destroySession,
+  PERMS, loadUser, requireAuth, requireSuper, createSession, destroySession, sessionConfig, resetSessionConfig, COOKIE, parseCookies,
   grantsFor, can, summary, sqlFilter, userCompanies, hash, verify,
 };

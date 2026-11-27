@@ -3,6 +3,7 @@ import { api, h, clear, toast, toastErr, state, modal, announce } from './core.j
 import { startA11y, getPrefs, setPrefs } from './a11y.js';
 import { renderApp } from './records.js';
 import { renderVoice } from './voice.js';
+import { renderSystemPanel } from './system.js';
 import { renderCompanies, renderCenters, renderWorkGroups, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit, renderFormDesigner } from './admin.js';
 
 const root = document.getElementById('root');
@@ -149,11 +150,14 @@ function renderHome() {
   const company = state.me.companies.find((c) => c.id === state.companyId);
   clear(content,
     h('div.page-head', h('div.title', h('div', h('h1', `Hola, ${state.me.name.split(' ')[0]}`), h('div.muted', company ? company.name : 'Sin empresa asignada')))),
+    state.me.is_superadmin ? h('div.sys-panel', { id: 'sys-panel' }) : null,
     voiceApps().length ? h('div.row', { style: { marginBottom: '16px' } }, voiceApps().map((a) => h('a.btn.primary.voice-start', { href: '#/voz/' + a.key }, `📞 Recoger ${a.name.toLowerCase()} por voz`))) : null,
     state.apps.length ? h('div.grid-cards', state.apps.map((a) => h('a.card.app-card', { href: '#/app/' + a.key },
       h('div.top', h('div.app-ico', { style: { width: '44px', height: '44px', borderRadius: '12px', display: 'grid', placeItems: 'center', fontSize: '22px', background: a.color + '22' } }, a.icon), h('span.big', a.count)),
       h('div', h('h2', a.name), h('div.muted.small', a.description || '')), homeStats(a)))) :
       h('div.card.empty', h('div.big', '🔒'), h('p', 'No tienes acceso a ninguna aplicación en esta empresa.'), h('p.muted.small', 'Pide a un administrador que te asigne un rol.')));
+  const sp = content.querySelector('#sys-panel');
+  if (sp) renderSystemPanel(sp).catch(() => sp.remove());
 }
 
 /** Resumen en la tarjeta de inicio: abiertos, vencidos y míos (al pulsar, abre la lista ya filtrada). */

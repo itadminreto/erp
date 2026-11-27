@@ -76,7 +76,7 @@ app.post('/api/login', wrap(async (req, res) => {
   } else ok = verify(password, u.password_hash);
   if (!ok) await failed();
   attempts.delete(k);
-  await createSession(res, u.id);
+  await createSession(res, u.id, req);
   await run(`UPDATE users SET last_login = UTC_TIMESTAMP() WHERE id = ?`, u.id);
   await run('DELETE FROM sessions WHERE expires_at < UTC_TIMESTAMP()');
   await audit({ user: u, ip: req.ip }, { entity: 'auth', entityId: u.id, action: 'login', summary: `Inicio de sesión${via === 'local' ? '' : ` (${via})`}` });

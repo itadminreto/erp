@@ -822,3 +822,48 @@ test('inicio de sesión con RADIUS: ajustes, prueba, usuarios RADIUS y locales, 
     await admin.call('PUT', '/admin/settings', { radius_enabled: '0' });
   }
 });
+
+test('panel del sistema: estado, sesiones con IP y navegador, desconectar e inactividad', async () => {
+  const s = (await admin.call('GET', '/admin/system')).body;
+  assert.ok(s.server.memory.total > 0 && s.server.cpus > 0);
+  assert.ok(s.disk.data.total > 0);
+  assert.ok(s.database.size > 0 && s.database.tables.some((t) => t.name === 'records'));
+  assert.ok(s.sessions.some((x) => x.current && x.email === 'admin@erp.local'));
+  assert.ok(!('token' in s.sessions[0]), 'nunca se envía el token de sesión');
+  assert.equal(s.session_config.hours, 168);
+  // otro usuario conectado
+  const ana = client(); await ana.login('ana@test.com', 'anapass123');
+  let list = (await admin.call('GET', '/admin/system')).body.sessions.filter((x) => x.email === 'ana@test.com');
+  assert.ok(list.length >= 1 && list[0].ip && list[0].online);
+  // desconectar una sesión
+  for (const x of list) assert.equal((await admin.call('DELETE', `/admin/sessions/${x.id}`)).status, 200);
+  assert.equal((await ana.call('GET', '/me')).status, 401, 'Ana queda desconectada');
+  // desconectar de todos los dispositivos
+  const a1 = client(); const a2 = client();
+  await a1.login('ana@test.com', 'anapass123'); await a2.login('ana@test.com', 'anapass123');
+  const anaId = (await admin.call('GET', '/admin/users')).body.find((u) => u.email === 'ana@test.com').id;
+  const r = await admin.call('DELETE', `/admin/users/${anaId}/sessions`);
+  assert.ok(r.body.closed >= 2);
+  assert.equal((await a1.call('GET', '/me')).status, 401);
+  assert.equal((await a2.call('GET', '/me')).status, 401);
+  // solo el super admin
+  const a3 = client(); await a3.login('ana@test.com', 'anapass123');
+  assert.equal((await a3.call('GET', '/admin/system')).status, 403);
+  // cierre por inactividad
+  assert.equal((await admin.call('PUT', '/admin/settings', { session_idle_minutes: '5000' })).status, 400);
+  await admin.call('PUT', '/admin/settings', { session_idle_minutes: '1', session_hours: '12' });
+  await db.run("UPDATE sessions s JOIN users u ON u.id = s.user_id SET s.last_seen = UTC_TIMESTAMP() - INTERVAL 10 MINUTE WHERE u.email = 'ana@test.com'");
+  assert.equal((await a3.call('GET', '/me')).status, 401, 'sesión cerrada por inactividad');
+  const a4 = client(); await a4.login('ana@test.com', 'anapass123');
+  const exp = (await db.get("SELECT TIMESTAMPDIFF(HOUR, UTC_TIMESTAMP(), s.expires_at) h FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.email = 'ana@test.com' ORDER BY s.id DESC LIMIT 1")).h;
+  assert.ok(exp >= 11 && exp <= 12, 'la duración configurada se aplica al nuevo acceso');
+  await admin.call('PUT', '/admin/settings', { session_idle_minutes: '0', session_hours: '168' });
+  // cerrar sesiones inactivas (+24 h); la propia se mantiene
+  await db.run("UPDATE sessions s JOIN users u ON u.id = s.user_id SET s.last_seen = UTC_TIMESTAMP() - INTERVAL 2 DAY WHERE u.email = 'ana@test.com'");
+  const cl = await admin.call('DELETE', '/admin/sessions?idle_hours=24');
+  assert.ok(cl.body.closed >= 1);
+  assert.equal((await a4.call('GET', '/me')).status, 401);
+  assert.equal((await admin.call('GET', '/me')).status, 200);
+  // auditoría
+  assert.ok((await admin.call('GET', '/admin/audit?action=logout_forced')).body.total >= 2);
+});

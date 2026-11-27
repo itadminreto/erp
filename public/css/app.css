@@ -526,3 +526,28 @@ textarea.voice-input { min-height: 120px; }
 .rad-sent { margin-top: 8px; width: auto; }
 .rad-sent th { text-align: left; font-weight: 600; color: var(--muted); padding-right: 14px; white-space: nowrap; }
 .rad-hint { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--text); display: grid; gap: 4px; }
+
+/* ---------- panel del sistema (inicio del super admin) ---------- */
+.sys-panel { margin-bottom: 22px; }
+.sys-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.sys-head h2 { font-size: 1.05rem; }
+.sys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.sys-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sys-card.wide { grid-column: 1 / -1; }
+.sys-title { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 4px; }
+.sys-big { font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+.sys-big small { font-size: .8rem; font-weight: 500; color: var(--muted); }
+.sys-bar { height: 10px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+.sys-bar-fill { height: 100%; background: var(--ok); border-radius: 6px; transition: width .4s; }
+.sys-bar-fill.warn { background: var(--warn); } .sys-bar-fill.danger { background: var(--danger); }
+.sys-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 6px 0 0; font-size: .84rem; }
+.sys-kv dt { color: var(--muted); } .sys-kv dd { margin: 0; overflow-wrap: anywhere; }
+.sys-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.sys-stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; }
+.sys-stat strong { font-size: 1.25rem; } .sys-stat span { font-size: .75rem; color: var(--muted); }
+.sys-stat.ok strong { color: var(--ok); } .sys-stat.warn strong { color: var(--warn); } .sys-stat.danger strong { color: var(--danger); }
+.sys-details summary { cursor: pointer; font-size: .84rem; color: var(--primary); margin-top: 6px; }
+.sys-mini td { padding: 3px 8px; font-size: .8rem; } .sys-mini td.num { text-align: right; white-space: nowrap; }
+.sys-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+.sys-dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.sys-sessions td { vertical-align: middle; }

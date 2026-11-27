@@ -102,6 +102,15 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 | **Responsive e intuitivo** | Menú lateral plegable, tablas que pasan a tarjetas en móvil, formularios a pantalla completa en móvil, tema claro/oscuro. |
 | **Datos generales (super admin)** | Empresas, centros, usuarios, roles, aplicaciones/campos y ajustes (nombre, URL pública, SMTP). |
 
+## Panel del sistema (inicio del super admin)
+
+Tarjetas que se actualizan cada 30 s y se pueden ocultar u ordenar (**⚙ Personalizar**): **base de datos** (tamaño,
+versión, conexiones, registros, imágenes, auditoría, tablas más grandes), **servidor** (memoria, CPU y carga,
+tiempo encendido, versiones), **disco** (espacio libre, carpeta de datos, copias), **usuarios conectados** (IP,
+navegador, inicio, última actividad y caducidad; **Desconectar** una sesión o **todas** las de un usuario, cerrar
+las inactivas de más de 24 h), **duración máxima de la sesión y cierre por inactividad**, **actividad de 24 h**
+(accesos, fallidos, altas, cambios…) y **copias de seguridad** (última, avisos y «Hacer copia ahora»).
+
 ## Autenticación RADIUS
 
 En **Ajustes → Autenticación RADIUS**: servidor principal y secundario, puerto (1812), secreto compartido (cifrado),

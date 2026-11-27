@@ -317,6 +317,12 @@ async function init() {
     KEY idx_files_record (record_id),
     CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Sesiones: id visible (para desconectar sin exponer el token), inicio, última actividad, IP y navegador
+  await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS id BIGINT NOT NULL AUTO_INCREMENT UNIQUE FIRST');
+  await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at DATETIME NULL');
+  await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen DATETIME NULL');
+  await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64) NULL');
+  await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(300) NULL');
   // Autenticación por usuario: '' = según Ajustes (RADIUS si está activado), 'local' = siempre contraseña del ERP
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_method VARCHAR(10) NOT NULL DEFAULT ''");
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS radius_username VARCHAR(200) NULL');
