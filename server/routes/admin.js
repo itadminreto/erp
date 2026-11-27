@@ -607,30 +607,65 @@ router.post('/backups-upload', uploadBackup.single('file'), wrap(async (req, res
 }));
 
 // ---------- auditoría global ----------
-function auditQuery(qs) {
+/**
+ * Búsqueda de auditoría: además del resumen, los cambios y el usuario, busca en los datos ACTUALES del registro
+ * afectado (número de línea, matrícula, correo, Nº…), sin contraseñas, firmas ni imágenes. Ignora espacios y guiones
+ * (612 34 56 78 = 612345678; 1234-ABC = 1234ABC).
+ */
+async function auditQuery(qs) {
   const where = ['1'], params = [];
+  if (qs.q) {
+    const term = String(qs.q).trim();
+    const compact = term.toLowerCase().replace(/[\s.\-]/g, '');
+    const like = `%${term}%`;
+    const conds = ['a.summary LIKE ?', 'a.changes LIKE ?', 'a.user_name LIKE ?'];
+    const cp = [like, like, like];
+    // registros cuyo contenido coincide
+    const fields = await all(`SELECT app_id, \`key\` FROM fields WHERE active = 1 AND type NOT IN ('password', 'signature', 'image')`);
+    const byApp = {};
+    for (const f of fields) if (KEY_RE.test(f.key)) (byApp[f.app_id] = byApp[f.app_id] || []).push(f.key);
+    const recConds = [], recParams = [];
+    if (/^\d+$/.test(term)) { recConds.push('r.number = ?'); recParams.push(Number(term)); }
+    for (const [appId, keys] of Object.entries(byApp)) {
+      const parts = keys.map((k) => `JSON_VALUE(r.data, '$.${k}') LIKE ?`);
+      recParams.push(Number(appId), ...keys.map(() => like));
+      if (compact.length >= 3) { // también sin espacios, guiones ni puntos en el dato guardado
+        for (const k of keys) parts.push(`REPLACE(REPLACE(REPLACE(LOWER(JSON_VALUE(r.data, '$.${k}')), ' ', ''), '-', ''), '.', '') LIKE ?`);
+        recParams.push(...keys.map(() => `%${compact}%`));
+      }
+      recConds.push(`(r.app_id = ? AND (${parts.join(' OR ')}))`);
+    }
+    if (recConds.length) {
+      conds.push(`(a.entity = 'record' AND a.entity_id IN (SELECT r.id FROM records r WHERE ${recConds.join(' OR ')}))`);
+      cp.push(...recParams);
+    }
+    where.push(`(${conds.join(' OR ')})`); params.push(...cp);
+  }
   if (qs.entity) { where.push('a.entity = ?'); params.push(qs.entity); }
   if (qs.action) { where.push('a.action = ?'); params.push(qs.action); }
   if (qs.app_id) { where.push('a.app_id = ?'); params.push(Number(qs.app_id)); }
   if (qs.user_id) { where.push('a.user_id = ?'); params.push(Number(qs.user_id)); }
   if (qs.from) { where.push('a.ts >= ?'); params.push(qs.from); }
   if (qs.to) { where.push('a.ts <= ?'); params.push(qs.to + ' 23:59:59'); }
-  if (qs.q) { where.push('(a.summary LIKE ? OR a.changes LIKE ? OR a.user_name LIKE ?)'); params.push(`%${qs.q}%`, `%${qs.q}%`, `%${qs.q}%`); }
   return { where: where.join(' AND '), params };
 }
-const AUDIT_SELECT = 'SELECT a.*, ap.name app_name, c.name company_name FROM audit_log a LEFT JOIN apps ap ON ap.id = a.app_id LEFT JOIN companies c ON c.id = a.company_id';
+// con el registro afectado (Nº y su campo título, p. ej. la matrícula o el número de línea)
+const AUDIT_SELECT = `SELECT a.*, ap.name app_name, c.name company_name, r.number rec_number,
+  JSON_VALUE(r.data, CONCAT('$.', ap.title_field)) rec_title
+  FROM audit_log a LEFT JOIN apps ap ON ap.id = a.app_id LEFT JOIN companies c ON c.id = a.company_id
+  LEFT JOIN records r ON a.entity = 'record' AND r.id = a.entity_id`;
 router.get('/audit', wrap(async (req, res) => {
-  const { where, params } = auditQuery(req.query);
+  const { where, params } = await auditQuery(req.query);
   const size = Math.min(Number(req.query.size) || 100, 500), page = Math.max(Number(req.query.page) || 1, 1);
   const total = (await get(`SELECT COUNT(*) n FROM audit_log a WHERE ${where}`, ...params)).n;
   const rows = await all(`${AUDIT_SELECT} WHERE ${where} ORDER BY a.id DESC LIMIT ? OFFSET ?`, ...params, size, (page - 1) * size);
   res.json({ total, rows: rows.map((r) => ({ ...r, changes: r.changes ? JSON.parse(r.changes) : [] })) });
 }));
 router.get('/audit/export', wrap(async (req, res) => {
-  const { where, params } = auditQuery(req.query);
+  const { where, params } = await auditQuery(req.query);
   const rows = await all(`${AUDIT_SELECT} WHERE ${where} ORDER BY a.id DESC LIMIT 100000`, ...params);
-  const header = ['Fecha', 'Usuario', 'Empresa', 'Aplicación', 'Entidad', 'ID', 'Acción', 'Resumen', 'Cambios', 'IP'];
-  const matrix = rows.map((r) => [r.ts, r.user_name, r.company_name || '', r.app_name || '', r.entity, r.entity_id, r.action, r.summary,
+  const header = ['Fecha', 'Usuario', 'Empresa', 'Aplicación', 'Registro', 'Entidad', 'ID', 'Acción', 'Resumen', 'Cambios', 'IP'];
+  const matrix = rows.map((r) => [r.ts, r.user_name, r.company_name || '', r.app_name || '', r.rec_number ? `Nº ${r.rec_number}${r.rec_title ? ' · ' + r.rec_title : ''}` : '', r.entity, r.entity_id, r.action, r.summary,
     (r.changes ? JSON.parse(r.changes) : []).map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' | '), r.ip]);
   await sendSheet(res, 'auditoria', header, matrix, req.query.format);
 }));

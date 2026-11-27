@@ -500,7 +500,7 @@ export async function renderAudit(root) {
   clear(root, head('Auditoría', 'Trazabilidad completa de todos los cambios, accesos y consultas de contraseñas',
     h('button.btn', { onclick: () => download('/admin/audit/export?' + qs() + '&format=xlsx', 'auditoria.xlsx') }, '⬇ Excel')),
   h('div.toolbar',
-    h('div.search', h('input', { type: 'search', placeholder: 'Buscar en resumen o cambios…', oninput: debounce((e) => { q.q = e.target.value; q.page = 1; load(); }, 300) })),
+    h('div.search', h('input', { type: 'search', placeholder: 'Buscar: Nº, línea, matrícula, correo, usuario…', 'aria-label': 'Buscar en la auditoría por Nº, número de línea, matrícula, correo, usuario o cambios', style: { minWidth: '300px' }, oninput: debounce((e) => { q.q = e.target.value; q.page = 1; load(); }, 300) })),
     sel('app_id', apps.map((a) => h('option', { value: a.id }, a.name)), 'Todas las apps'),
     sel('user_id', users.map((u) => h('option', { value: u.id }, u.name)), 'Todos los usuarios'),
     sel('action', Object.entries(ACTION_LABELS).map(([k, [l]]) => h('option', { value: k }, l)), 'Todas las acciones'),
@@ -510,10 +510,11 @@ export async function renderAudit(root) {
   async function load() {
     const r = await api('/admin/audit?' + qs());
     const pages = Math.max(1, Math.ceil(r.total / 100));
-    clear(box, h('div.table-wrap', h('table.data', h('thead', h('tr', ['Fecha', 'Usuario', 'Empresa', 'App', 'Acción', 'Resumen', 'Cambios'].map((t) => h('th.nosort', t)))),
+    clear(box, h('div.table-wrap', h('table.data', h('thead', h('tr', ['Fecha', 'Usuario', 'Empresa', 'App', 'Registro', 'Acción', 'Resumen', 'Cambios'].map((t) => h('th.nosort', t)))),
       h('tbody', r.rows.map((a) => {
         const [l, c] = ACTION_LABELS[a.action] || [a.action, ''];
         return h('tr', { style: { cursor: 'default' } }, h('td.small', fmtDateTime(a.ts)), h('td', a.user_name || ''), h('td.small', a.company_name || ''), h('td.small', a.app_name || a.entity),
+          h('td.small', a.rec_number ? [h('strong', `Nº ${a.rec_number}`), a.rec_title ? h('div', String(a.rec_title)) : null] : ''),
           h('td', h('span.chip', { class: c }, l)), h('td', { style: { whiteSpace: 'normal', maxWidth: '360px' } }, `${a.summary || ''}${a.entity_id ? ` (#${a.entity_id})` : ''}`),
           h('td.small', { style: { whiteSpace: 'normal', maxWidth: '420px' } }, a.changes.slice(0, 8).map((ch) => h('div', `${ch.field}: ${String(ch.from ?? '')} → ${String(ch.to ?? '')}`)), a.changes.length > 8 ? `… +${a.changes.length - 8}` : ''));
       })))),

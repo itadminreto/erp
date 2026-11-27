@@ -680,3 +680,28 @@ test('asignar trabajos a grupos de trabajo: sede, miembros, «míos», filtro y 
   await admin.call('PUT', `/admin/work_groups/${g1.id}`, { members: [] });
   assert.equal((await anaC.call('GET', '/apps/recados/records?mine=1')).body.total, 0);
 });
+
+test('auditoría: buscar por número de línea, matrícula, correo o Nº del registro afectado', async () => {
+  const lin = await admin.call('POST', '/apps/lineas/records', { center_id: ids.c1, data: { numero: '612 34 56 78', pin: '1234' } });
+  assert.equal(lin.status, 201);
+  // un evento que no lleva el número en el resumen: consultar el PIN
+  await admin.call('GET', `/apps/lineas/records/${lin.body.id}/password/pin`);
+  const veh = await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: '9999-XYZ', km: 10 } });
+  await admin.call('PUT', `/apps/vehiculos/records/${veh.body.id}`, { data: { km: 20 } });
+  const mail = await admin.call('POST', '/apps/correo/records', { center_id: ids.c1, data: { direccion: 'buzon.auditoria@ejemplo.com' } });
+  const find = async (q) => (await admin.call('GET', `/admin/audit?q=${encodeURIComponent(q)}`)).body;
+  const l = await find('612345678'); // sin espacios
+  assert.ok(l.rows.some((r) => r.action === 'reveal' && r.entity_id === lin.body.id), 'encuentra la consulta del PIN por el número de línea');
+  const ev = l.rows.find((r) => r.entity_id === lin.body.id && r.action === 'reveal');
+  assert.equal(ev.rec_number, lin.body.number);
+  assert.equal(ev.rec_title, '612 34 56 78');
+  const v = await find('9999xyz'); // sin guion y en minúsculas
+  assert.ok(v.rows.some((r) => r.action === 'update' && r.entity_id === veh.body.id));
+  const c = await find('buzon.auditoria');
+  assert.ok(c.rows.some((r) => r.action === 'create' && r.entity_id === mail.body.id));
+  const n = await find(String(veh.body.number));
+  assert.ok(n.rows.some((r) => r.entity_id === veh.body.id));
+  // exportación con la columna Registro
+  const x = await admin.call('GET', '/admin/audit/export?format=csv&q=9999XYZ');
+  assert.match(x.body.toString('utf8'), /9999-XYZ/);
+});
