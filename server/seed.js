@@ -104,7 +104,7 @@ const APPS = [
       ['prioridad', 'Prioridad', 'select', { choices: ['Baja', 'Media', 'Alta', 'Urgente'] }],
       ['estado', 'Estado', 'select', { choices: ['Pendiente', 'En curso', 'Hecho', 'Cancelado'] }],
       ['fecha_limite', 'Fecha límite', 'date', { due_alert: true }],
-      ['fecha_realizado', 'Fecha realizado', 'date', { show_in_list: 0 }],
+      ['fecha_realizado', 'Cita con el cliente', 'datetime'],
     ],
   },
 ];

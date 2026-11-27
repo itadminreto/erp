@@ -361,6 +361,18 @@ async function init() {
     if (rec) await pool.query("INSERT IGNORE INTO fields (app_id, `key`, label, type, width, sort, show_in_list) VALUES (?, 'grupo', 'Grupo de trabajo', 'group', 'md', 3, 1)", [rec.id]);
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_group_v1', '1')");
   }
+  // Recados: «Fecha realizado» es la cita con el cliente → fecha y hora. Una sola vez.
+  const ctDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_cita_v1'");
+  if (!ctDone.length) {
+    const [f] = await pool.query(`SELECT f.id, f.app_id, f.label FROM fields f JOIN apps a ON a.id = f.app_id
+      WHERE a.\`key\` = 'recados' AND f.\`key\` = 'fecha_realizado' AND f.type = 'date'`);
+    if (f) {
+      await pool.query(`UPDATE fields SET type = 'datetime'${f.label === 'Fecha realizado' ? ", label = 'Cita con el cliente'" : ''} WHERE id = ?`, [f.id]);
+      await pool.query(`UPDATE records SET data = JSON_SET(data, '$.fecha_realizado', CONCAT(JSON_VALUE(data, '$.fecha_realizado'), 'T00:00'))
+        WHERE app_id = ? AND JSON_VALUE(data, '$.fecha_realizado') REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`, [f.app_id]);
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_cita_v1', '1')");
+  }
   // Formulario de Recados organizado en secciones (si aún no tenía). Una sola vez.
   const rlDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_layout_v1'");
   if (!rlDone.length) {

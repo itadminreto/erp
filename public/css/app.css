@@ -511,3 +511,6 @@ textarea.voice-input { min-height: 120px; }
   .form-card { padding: 12px; }
   .rec-modal .head-chip { display: none; }
 }
+.date-filter { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.date-filter > select { flex: 0 1 230px; }
+.date-filter input[type=date] { width: auto; }

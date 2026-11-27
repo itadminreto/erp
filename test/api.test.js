@@ -705,3 +705,21 @@ test('auditoría: buscar por número de línea, matrícula, correo o Nº del reg
   const x = await admin.call('GET', '/admin/audit/export?format=csv&q=9999XYZ');
   assert.match(x.body.toString('utf8'), /9999-XYZ/);
 });
+
+test('recados: cita con el cliente (fecha y hora) y filtros por rango de fechas', async () => {
+  const f = (await admin.call('GET', '/apps/recados')).body.fields.find((x) => x.key === 'fecha_realizado');
+  assert.equal(f.type, 'datetime');
+  assert.equal(f.label, 'Cita con el cliente');
+  const mk = (t, cita) => admin.call('POST', '/apps/recados/records', { center_id: ids.c1, data: { titulo: t, fecha_realizado: cita } });
+  const a = await mk('Cita A', '2031-03-10T09:30'); assert.equal(a.body.data.fecha_realizado, '2031-03-10T09:30');
+  await mk('Cita B', '2031-03-12 17:00');
+  await mk('Cita C', '2031-04-01');
+  await mk('Sin cita', '');
+  const titles = async (qs) => (await admin.call('GET', `/apps/recados/records?q=Cita&size=100&${qs}`)).body.rows.map((r) => r.data.titulo).sort();
+  assert.deepEqual(await titles('f_fecha_realizado__from=2031-03-10&f_fecha_realizado__to=2031-03-10'), ['Cita A']);
+  assert.deepEqual(await titles('f_fecha_realizado__from=2031-03-11'), ['Cita B', 'Cita C']);
+  assert.deepEqual(await titles('f_fecha_realizado__to=2031-03-31&f_fecha_realizado__from=2031-01-01'), ['Cita A', 'Cita B']);
+  assert.ok((await titles('f_fecha_realizado__empty=1')).includes('Sin cita'));
+  assert.ok(!(await titles('f_fecha_realizado__empty=0')).includes('Sin cita'));
+  assert.equal((await admin.call('GET', '/apps/recados/records?f_fecha_realizado__from=mañana')).status, 400);
+});

@@ -119,16 +119,57 @@ export async function renderApp(root, key, onCountsChanged) {
     st.mine = !st.mine; st.page = 1; mineBtn.classList.toggle('on-toggle', st.mine); load();
   } }, '👤 Míos') : null;
   const filterable = meta.fields.filter((f) => ['select', 'user', 'checkbox', 'group'].includes(f.type));
-  const filterBtn = filterable.length ? h('button.btn', { onclick: () => openFilters() }, '⚲ ', h('span.lbl', 'Filtros'), h('span.badge', { hidden: true })) : null;
+  // filtros por fecha: atajo (hoy, esta semana…) o rango; se guardan como <campo>__p, __from, __to
+  const dateFilterable = meta.fields.filter((f) => ['date', 'datetime'].includes(f.type));
+  const DATE_PRESETS = [['', '— Cualquier fecha —'], ['today', 'Hoy'], ['tomorrow', 'Mañana'], ['week', 'Esta semana'], ['next7', 'Próximos 7 días'],
+    ['month', 'Este mes'], ['future', 'De hoy en adelante'], ['past', 'Anteriores a hoy'], ['empty', 'Sin fecha'], ['range', 'Entre dos fechas…']];
+  const isoD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function presetRange(p) {
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const add = (n) => { const d = new Date(t); d.setDate(d.getDate() + n); return isoD(d); };
+    switch (p) {
+      case 'today': return { from: add(0), to: add(0) };
+      case 'tomorrow': return { from: add(1), to: add(1) };
+      case 'week': { const dow = (t.getDay() + 6) % 7; return { from: add(-dow), to: add(6 - dow) }; }
+      case 'next7': return { from: add(0), to: add(6) };
+      case 'month': return { from: isoD(new Date(t.getFullYear(), t.getMonth(), 1)), to: isoD(new Date(t.getFullYear(), t.getMonth() + 1, 0)) };
+      case 'future': return { from: add(0) };
+      case 'past': return { to: add(-1) };
+      case 'empty': return { empty: '1' };
+      default: return {};
+    }
+  }
+  /** Pasa los filtros a la URL (los atajos de fecha se calculan en el momento: «Hoy» siempre es hoy). */
+  function appendFilters(qs) {
+    for (const [k, v] of Object.entries(st.filters)) {
+      if (v === '' || v === undefined) continue;
+      const m = k.match(/^(.+)__(p|from|to)$/);
+      if (!m) { qs.set('f_' + k, v); continue; }
+      if (m[2] !== 'p') continue;
+      const r = v === 'range' ? { from: st.filters[m[1] + '__from'], to: st.filters[m[1] + '__to'] } : presetRange(v);
+      for (const [rk, rv] of Object.entries(r)) if (rv) qs.set(`f_${m[1]}__${rk}`, rv);
+    }
+  }
+  const presetText = (key) => {
+    const p = st.filters[key + '__p'];
+    if (p !== 'range') return (DATE_PRESETS.find((x) => x[0] === p) || [, p])[1];
+    const f = st.filters[key + '__from'], t = st.filters[key + '__to'];
+    return f && t ? `${fmtDate(f)} – ${fmtDate(t)}` : f ? `desde ${fmtDate(f)}` : t ? `hasta ${fmtDate(t)}` : 'cualquiera';
+  };
+  const filterBtn = filterable.length || dateFilterable.length ? h('button.btn', { onclick: () => openFilters() }, '⚲ ', h('span.lbl', 'Filtros'), h('span.badge', { hidden: true })) : null;
   const activeBar = h('div.active-filters');
   const filterText = (k, v) => { const f = fieldsByKey[k]; if (!f) return v; return f.type === 'user' ? (usersById[v] ? usersById[v].name : v) : f.type === 'group' ? groupLabel(groupsById[v]) || v : f.type === 'checkbox' ? (v === '1' ? 'Sí' : 'No') : v; };
   function drawActiveFilters() {
     const act = Object.entries(st.filters).filter(([k, v]) => v !== '' && fieldsByKey[k]);
-    if (filterBtn) { const bd = filterBtn.querySelector('.badge'); bd.hidden = !act.length; bd.textContent = act.length; }
+    const dact = dateFilterable.filter((f) => st.filters[f.key + '__p']);
+    const removeDate = (f) => { for (const x of ['__p', '__from', '__to']) delete st.filters[f.key + x]; st.page = 1; drawActiveFilters(); load(); };
+    if (filterBtn) { const bd = filterBtn.querySelector('.badge'); bd.hidden = !(act.length + dact.length); bd.textContent = act.length + dact.length; }
     clear(activeBar, st.overdue ? h('span.chip.filter-chip', '⚠ Solo vencidos', h('button', { title: 'Quitar filtro', 'aria-label': 'Quitar filtro: solo vencidos', onclick: () => { st.overdue = false; st.page = 1; drawActiveFilters(); load(); } }, '✕')) : null,
       act.map(([k, v]) => h('span.chip.filter-chip', `${fieldsByKey[k].label}: ${filterText(k, v)}`,
       h('button', { title: 'Quitar filtro', 'aria-label': `Quitar filtro ${fieldsByKey[k].label}: ${filterText(k, v)}`, onclick: () => { delete st.filters[k]; st.page = 1; drawActiveFilters(); load(); } }, '✕'))),
-    act.length > 1 ? h('button.btn.sm.ghost', { onclick: () => { st.filters = {}; st.page = 1; drawActiveFilters(); load(); } }, 'Quitar todos') : null);
+    dact.map((f) => h('span.chip.filter-chip', `📅 ${f.label}: ${presetText(f.key)}`,
+      h('button', { title: 'Quitar filtro', 'aria-label': `Quitar filtro ${f.label}: ${presetText(f.key)}`, onclick: () => removeDate(f) }, '✕'))),
+    act.length + dact.length > 1 ? h('button.btn.sm.ghost', { onclick: () => { st.filters = {}; st.page = 1; drawActiveFilters(); load(); } }, 'Quitar todos') : null);
   }
   function openFilters() {
     const sels = {};
@@ -138,13 +179,35 @@ export async function renderApp(root, key, onCountsChanged) {
         : f.type === 'user' ? meta.users.map((u) => [String(u.id), u.name])
         : f.type === 'group' ? (meta.groups || []).map((g) => [String(g.id), groupLabel(g) + (g.mine ? ' · mi grupo' : '')]) : [['1', 'Sí'], ['0', 'No']];
       sels[f.key] = h('select', h('option', { value: '' }, '— Cualquiera —'), opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === v }, l)));
-      return h('div.field', h('label', f.label), sels[f.key]);
+      sels[f.key].id = 'ff-' + f.key;
+      return h('div.field', h('label', { for: sels[f.key].id }, f.label), sels[f.key]);
     }));
+    // filtros por fecha
+    const dsel = {};
+    for (const f of dateFilterable) {
+      const p = h('select', DATE_PRESETS.map(([v, l]) => h('option', { value: v, selected: (st.filters[f.key + '__p'] || '') === v }, l)));
+      const from = h('input', { type: 'date', value: st.filters[f.key + '__from'] || '', 'aria-label': `${f.label}: desde` });
+      const to = h('input', { type: 'date', value: st.filters[f.key + '__to'] || '', 'aria-label': `${f.label}: hasta` });
+      const range = h('div.row', { style: { flexWrap: 'nowrap', gap: '6px', alignItems: 'center' } }, from, h('span.muted.small', 'a'), to);
+      const sync = () => { range.hidden = p.value !== 'range'; };
+      p.addEventListener('change', () => { sync(); if (p.value === 'range') from.focus(); });
+      sync();
+      dsel[f.key] = { p, from, to };
+      p.id = 'df-' + f.key;
+      content.append(h('div.field', { style: { gridColumn: '1 / -1' } }, h('label', { for: p.id }, `📅 ${f.label}`),
+        h('div.date-filter', p, range)));
+    }
     const m = modal({ title: '⚲ Filtros', size: '', content,
-      footer: [h('button.btn.ghost', { onclick: () => { Object.values(sels).forEach((x) => { x.value = ''; }); } }, 'Limpiar'), h('div.spacer'),
+      footer: [h('button.btn.ghost', { onclick: () => { Object.values(sels).forEach((x) => { x.value = ''; }); Object.values(dsel).forEach((x) => { x.p.value = ''; x.p.dispatchEvent(new Event('change')); }); } }, 'Limpiar'), h('div.spacer'),
         h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
         h('button.btn.primary', { onclick: () => {
           st.filters = Object.fromEntries(Object.entries(sels).map(([k, x]) => [k, x.value]).filter(([, v]) => v !== ''));
+          for (const [k, x] of Object.entries(dsel)) {
+            if (!x.p.value) continue;
+            if (x.p.value === 'range' && !x.from.value && !x.to.value) continue;
+            st.filters[k + '__p'] = x.p.value;
+            if (x.p.value === 'range') { if (x.from.value) st.filters[k + '__from'] = x.from.value; if (x.to.value) st.filters[k + '__to'] = x.to.value; }
+          }
           st.page = 1; drawActiveFilters(); m.close(); load();
         } }, 'Aplicar')] });
   }
@@ -179,7 +242,7 @@ export async function renderApp(root, key, onCountsChanged) {
     if (st.center) qs.set('center', st.center);
     if (st.trash) qs.set('trash', '1');
     if (st.sort) { qs.set('sort', st.sort); qs.set('dir', st.dir); }
-    for (const [k, v] of Object.entries(st.filters)) if (v !== '') qs.set('f_' + k, v);
+    appendFilters(qs);
     if (st.state) qs.set('state', st.state);
     if (st.mine) qs.set('mine', '1');
     if (st.overdue) qs.set('overdue', '1');
@@ -210,7 +273,7 @@ export async function renderApp(root, key, onCountsChanged) {
     const qs = new URLSearchParams();
     if (st.q) qs.set('q', st.q);
     if (st.center) qs.set('center', st.center);
-    for (const [k, v] of Object.entries(st.filters)) if (v !== '') qs.set('f_' + k, v);
+    appendFilters(qs);
     if (st.state) qs.set('state', st.state);
     if (st.mine) qs.set('mine', '1');
     if (st.overdue) qs.set('overdue', '1');
@@ -540,7 +603,7 @@ export async function renderApp(root, key, onCountsChanged) {
     if (st.center) qs.set('center', st.center);
     if (st.trash) qs.set('trash', '1');
     if (st.sort) { qs.set('sort', st.sort); qs.set('dir', st.dir); }
-    for (const [k, v] of Object.entries(st.filters)) if (v !== '') qs.set('f_' + k, v);
+    appendFilters(qs);
     if (st.state) qs.set('state', st.state);
     if (st.mine) qs.set('mine', '1');
     if (st.overdue) qs.set('overdue', '1');

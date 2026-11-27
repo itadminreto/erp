@@ -337,6 +337,16 @@ async function listQuery(req, q) {
   // filtros por columna: f_<campo>=valor
   for (const [k, v] of Object.entries(q)) {
     if (!k.startsWith('f_') || v === '') continue;
+    // rango de fechas: f_<campo>__from / __to (AAAA-MM-DD), f_<campo>__empty=1 (sin fecha) o =0 (con fecha)
+    const rm = k.match(/^f_([a-z][a-z0-9_]*)__(from|to|empty)$/);
+    if (rm) {
+      const df = req.fields.find((x) => x.key === rm[1] && ['date', 'datetime'].includes(x.type));
+      if (!df) continue;
+      if (rm[2] === 'empty') { where.push(v === '1' ? `COALESCE(${jv(df.key)}, '') = ''` : `COALESCE(${jv(df.key)}, '') <> ''`); continue; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) throw httpError(400, 'Fecha de filtro no válida');
+      where.push(`LEFT(${jv(df.key)}, 10) ${rm[2] === 'from' ? '>=' : '<='} ?`); params.push(String(v));
+      continue;
+    }
     const key = k.slice(2);
     const f = req.fields.find((x) => x.key === key);
     if (!f || f.type === 'password') continue;
