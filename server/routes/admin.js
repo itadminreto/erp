@@ -591,7 +591,8 @@ router.put('/apps/:id/fields-order', wrap(async (req, res) => {
 
 // ---------- ajustes ----------
 const SETTINGS = ['public_url', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass', 'smtp_from', 'app_name', 'backup_auto', 'backup_keep',
-  'radius_enabled', 'radius_host', 'radius_port', 'radius_host2', 'radius_port2', 'radius_secret', 'radius_timeout', 'radius_retries', 'radius_nas_id', 'radius_user_format', 'radius_fallback'];
+  'radius_enabled', 'radius_host', 'radius_port', 'radius_host2', 'radius_port2', 'radius_secret', 'radius_timeout', 'radius_retries', 'radius_nas_id', 'radius_user_format', 'radius_fallback',
+  'radius_nas_ip', 'radius_calling_station', 'radius_domain'];
 const SECRET_SETTINGS = ['smtp_pass', 'radius_secret'];
 const radius = require('../radius');
 router.get('/settings', wrap(async (req, res) => {
@@ -610,6 +611,8 @@ router.put('/settings', wrap(async (req, res) => {
     if (SECRET_SETTINGS.includes(k)) { if (v === '••••••••') continue; v = v ? encrypt(v) : ''; }
     if (['radius_host', 'radius_host2'].includes(k) && v && !/^[A-Za-z0-9.:\-]+$/.test(v)) throw httpError(400, 'Servidor RADIUS no válido (IP o nombre)');
     if (['radius_port', 'radius_port2'].includes(k) && v && !(Number(v) >= 1 && Number(v) <= 65535)) throw httpError(400, 'Puerto RADIUS no válido');
+    if (k === 'radius_nas_ip' && v && !require('net').isIPv4(v)) throw httpError(400, 'NAS-IP-Address debe ser una IPv4 (la del servidor del ERP)');
+    if (k === 'radius_domain' && v && !/^[A-Za-z0-9._-]{1,64}$/.test(v)) throw httpError(400, 'Dominio no válido (ej. ASOCIACION)');
     await run('INSERT INTO settings (`key`, value) VALUES (?,?) ON DUPLICATE KEY UPDATE value = VALUES(value)', k, v);
     changes.push({ field: k, from: '', to: SECRET_SETTINGS.includes(k) ? '••••' : v });
   }
@@ -627,12 +630,19 @@ router.post('/settings/test-radius', wrap(async (req, res) => {
   const { username = '', password = '' } = req.body || {};
   if (!cfg.servers.length || !cfg.secret) throw httpError(400, 'Guarda primero el servidor y el secreto compartido');
   if (!username || !password) throw httpError(400, 'Indica usuario y contraseña de prueba');
+  // el usuario de prueba se envía tal cual o, si es un email/usuario del ERP, como se enviaría al iniciar sesión
+  const erpUser = await get('SELECT * FROM users WHERE (email = ? OR radius_username = ?) AND deleted_at IS NULL', String(username).trim(), String(username).trim());
+  const sentUser = erpUser ? radius.radiusUsername(cfg, erpUser) : String(username).trim();
+  const source = await radius.sourceAddress(cfg.servers[0].host, cfg.servers[0].port);
+  const sent = { username: sentUser, nas_identifier: cfg.nasId, nas_ip: cfg.nasIp || '(no se envía)', calling_station: cfg.sendCallingStation ? req.ip : '(no se envía)',
+    method: 'PAP + Message-Authenticator', source_ip: source || '?', erp_user: erpUser ? erpUser.email : '' };
   const t0 = Date.now();
   let out;
   try {
-    const r = await radius.authenticate({ ...cfg, username: String(username), password: String(password), callingStation: req.ip });
+    const r = await radius.authenticate({ ...cfg, username: sentUser, password: String(password), callingStation: req.ip });
     out = { result: r.code, message: r.message, server: r.server, ms: Date.now() - t0 };
   } catch (e) { out = { result: 'error', message: e.message, ms: Date.now() - t0 }; }
+  out.sent = sent;
   await audit(req, { entity: 'settings', action: 'update', summary: `Prueba RADIUS con «${username}»: ${out.result}` });
   res.json(out);
 }));

@@ -781,6 +781,10 @@ test('inicio de sesión con RADIUS: ajustes, prueba, usuarios RADIUS y locales, 
     // probar desde Ajustes
     assert.equal((await admin.call('POST', '/admin/settings/test-radius', { username: 'rosa', password: 'clave-del-dominio' })).body.result, 'accept');
     assert.equal((await admin.call('POST', '/admin/settings/test-radius', { username: 'rosa', password: 'mala' })).body.result, 'reject');
+    const diag = (await admin.call('POST', '/admin/settings/test-radius', { username: 'rosa', password: 'mala' })).body;
+    assert.equal(diag.sent.source_ip, '127.0.0.1');
+    assert.equal(diag.sent.calling_station, '(no se envía)');
+    assert.equal(diag.sent.method, 'PAP + Message-Authenticator');
     // usuario nuevo sin contraseña local: entra con la del dominio (usuario = parte antes de la @)
     const roles = (await admin.call('GET', '/admin/roles')).body.roles;
     const cu = await admin.call('POST', '/admin/users', { name: 'Rosa', email: 'rosa@test.com', must_change_password: true, assignments: [{ company_id: ids.company, role_id: roles[0].id }] });

@@ -471,8 +471,13 @@ function radiusCard(s) {
     radius_secret: inp('radius_secret', { type: 'password', autocomplete: 'new-password', placeholder: 'Secreto compartido (el mismo que en el servidor)' }),
     radius_nas_id: inp('radius_nas_id', { placeholder: 'erp' }),
     radius_timeout: inp('radius_timeout', { type: 'number', min: 1, max: 30, placeholder: '5' }), radius_retries: inp('radius_retries', { type: 'number', min: 0, max: 5, placeholder: '2' }),
-    radius_user_format: h('select', { id: 'rad-radius_user_format' }, h('option', { value: 'email', selected: s.radius_user_format !== 'local' }, 'El email completo (ana@asociacion.org)'),
-      h('option', { value: 'local', selected: s.radius_user_format === 'local' }, 'Solo la parte antes de la @ (ana)')),
+    radius_user_format: h('select', { id: 'rad-radius_user_format' },
+      h('option', { value: 'email', selected: !['local', 'domain'].includes(s.radius_user_format) }, 'El email completo (ana@asociacion.org)'),
+      h('option', { value: 'local', selected: s.radius_user_format === 'local' }, 'Solo la parte antes de la @ (ana)'),
+      h('option', { value: 'domain', selected: s.radius_user_format === 'domain' }, 'DOMINIO\\usuario (Windows / NPS)')),
+    radius_domain: inp('radius_domain', { placeholder: 'ASOCIACION' }),
+    radius_nas_ip: inp('radius_nas_ip', { placeholder: '192.168.0.201' }),
+    radius_calling_station: h('input', { type: 'checkbox', checked: s.radius_calling_station === '1' }),
     radius_fallback: h('input', { type: 'checkbox', checked: s.radius_fallback === '1' }),
   };
   const fld = (l, el, help) => h('div.field', h('label', { for: el.id }, l), el, help ? h('div.help', help) : null);
@@ -486,7 +491,11 @@ function radiusCard(s) {
     h('div.two-col', fld('Servidor RADIUS', f.radius_host), fld('Puerto', f.radius_port), fld('Servidor secundario', f.radius_host2, 'Se usa si el principal no responde.'), fld('Puerto secundario', f.radius_port2),
       fld('Secreto compartido', f.radius_secret), fld('NAS-Identifier', f.radius_nas_id, 'Nombre con el que se identifica el ERP ante el servidor.'),
       fld('Espera por intento (segundos)', f.radius_timeout), fld('Reintentos', f.radius_retries),
-      fld('Usuario que se envía', f.radius_user_format, 'En cada usuario puedes poner un «Usuario RADIUS» distinto.')),
+      fld('Usuario que se envía', f.radius_user_format, 'En cada usuario puedes poner un «Usuario RADIUS» distinto.'),
+      fld('Dominio (para DOMINIO\\usuario)', f.radius_domain, 'Nombre NetBIOS del dominio, p. ej. ASOCIACION.'),
+      fld('NAS-IP-Address (opcional)', f.radius_nas_ip, 'IP del servidor del ERP. Solo si tu servidor RADIUS lo exige.')),
+    h('label.check', f.radius_calling_station, 'Enviar la IP del ordenador del usuario (Calling-Station-Id)'),
+    h('div.help', { style: { marginTop: '-6px' } }, 'Solo informativo; algunas directivas de NPS rechazan si viene. Por defecto, desactivado.'),
     h('label.check', f.radius_fallback, 'Si el servidor RADIUS no responde, permitir la contraseña local del ERP'),
     h('div.row', h('div.spacer'), h('button.btn.primary', { onclick: async () => {
       const body = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value]));
@@ -499,8 +508,24 @@ function radiusCard(s) {
         clear(result, 'Probando…');
         try {
           const r = await api('/admin/settings/test-radius', { method: 'POST', body: { username: tUser.value, password: tPass.value } });
-          const txt = { accept: '✔ Aceptado (Access-Accept)', reject: '✕ Rechazado (Access-Reject): usuario o contraseña incorrectos', challenge: '⚠ El servidor pide un segundo paso (Access-Challenge): no está admitido', error: '⚠ Error' }[r.result];
-          clear(result, h('span.chip', { class: r.result === 'accept' ? 'ok' : r.result === 'reject' ? 'danger' : 'warn' }, txt), ' ', r.server ? `${r.server} · ` : '', `${r.ms} ms`, r.message ? h('div', r.message) : null);
+          const txt = { accept: '✔ Aceptado (Access-Accept)', reject: '✕ Rechazado por el servidor (Access-Reject)', challenge: '⚠ El servidor pide un segundo paso (Access-Challenge): no está admitido', error: '⚠ Error' }[r.result];
+          const hint = r.result === 'reject' ? ['El servidor ha recibido la petición y la ha rechazado. Revisa en este orden:',
+            '1. Usuario y contraseña (y que el «Usuario enviado» de arriba sea como lo espera tu servidor: email, usuario o DOMINIO\\usuario).',
+            '2. Que la directiva permita PAP. En NPS de Windows: Directivas de red → (tu directiva) → Restricciones → Métodos de autenticación → marcar «Autenticación no cifrada (PAP, SPAP)».',
+            '3. Las condiciones de la directiva (grupos de Windows, NAS-Identifier, tipo de puerto…). En NPS, el motivo exacto está en el Visor de eventos → Servicios de acceso a redes (evento 6273, «Código de motivo»).',
+            '4. En FreeRADIUS, arranca «freeradius -X» y verás por qué rechaza.']
+            : r.result === 'error' ? ['No hay respuesta. Normalmente es por:',
+              `1. El servidor RADIUS no tiene dado de alta como cliente la IP de origen ${r.sent && r.sent.source_ip ? r.sent.source_ip : 'del ERP'} (no la de tu ordenador).`,
+              '2. El secreto compartido no coincide (el servidor descarta el paquete sin contestar).',
+              '3. Un cortafuegos bloquea UDP 1812 entre el ERP y el servidor RADIUS.'] : [];
+          const sent = r.sent || {};
+          clear(result, h('span.chip', { class: r.result === 'accept' ? 'ok' : r.result === 'reject' ? 'danger' : 'warn' }, txt), ' ', r.server ? `${r.server} · ` : '', `${r.ms} ms`,
+            r.message ? h('div', h('strong', 'Mensaje del servidor: '), r.message) : null,
+            h('table.data.rad-sent', h('tbody',
+              [['Sale desde la IP (servidor del ERP)', sent.source_ip], ['Usuario enviado', sent.username], ['Método', sent.method], ['NAS-Identifier', sent.nas_identifier],
+                ['NAS-IP-Address', sent.nas_ip], ['Calling-Station-Id', sent.calling_station], ['Usuario del ERP', sent.erp_user || '(no encontrado: se envía tal cual)']]
+                .map(([k, v]) => h('tr', { style: { cursor: 'default' } }, h('th', { scope: 'row' }, k), h('td', v || '—'))))),
+            hint.length ? h('div.rad-hint', hint.map((x) => h('div', x))) : null);
         } catch (e) { clear(result, h('span.chip.danger', e.message)); }
         tPass.value = '';
       } }, '🔌 Probar')),

@@ -116,8 +116,9 @@ function exchange(host, port, req, secret, { timeout = 5000, retries = 2 } = {})
  * Devuelve { ok: boolean, code: 'accept'|'reject'|'challenge', message, server }. Lanza error (err.unreachable)
  * si ningún servidor responde.
  */
-async function authenticate({ servers, secret, username, password, nasId, nasIp, callingStation, timeout, retries }) {
+async function authenticate({ servers, secret, username, password, nasId, nasIp, callingStation, sendCallingStation = false, timeout, retries }) {
   if (!secret) throw new Error('Falta el secreto compartido de RADIUS');
+  if (!sendCallingStation) callingStation = undefined; // la IP del usuario solo se envía si se activa en Ajustes
   let lastErr = null;
   for (const s of servers.filter((x) => x && x.host)) {
     const req = buildRequest({ username, password, secret, nasId, nasIp, callingStation });
@@ -143,10 +144,13 @@ async function radiusConfig() {
     enabled: s.radius_enabled === '1',
     servers: [{ host: s.radius_host, port: Number(s.radius_port) || 1812 }, { host: s.radius_host2, port: Number(s.radius_port2) || Number(s.radius_port) || 1812 }].filter((x) => x.host),
     secret: s.radius_secret ? decrypt(s.radius_secret) : '',
+    nasIp: s.radius_nas_ip || '',
+    sendCallingStation: s.radius_calling_station === '1',
+    domain: s.radius_domain || '',
     timeout: Math.min(Math.max(Number(s.radius_timeout) || 5, 1), 30) * 1000,
     retries: Math.min(Math.max(Number(s.radius_retries ?? 2) || 0, 0), 5),
     nasId: s.radius_nas_id || 'erp',
-    userFormat: s.radius_user_format === 'local' ? 'local' : 'email',
+    userFormat: ['local', 'domain'].includes(s.radius_user_format) ? s.radius_user_format : 'email',
     fallback: s.radius_fallback === '1',
   };
 }
@@ -155,8 +159,21 @@ const usesRadius = (cfg, user) => cfg.enabled && user.auth_method !== 'local';
 /** Nombre de usuario que se envía al servidor RADIUS. */
 function radiusUsername(cfg, user) {
   if (user.radius_username) return user.radius_username;
-  return cfg.userFormat === 'local' ? String(user.email).split('@')[0] : user.email;
+  const local = String(user.email).split('@')[0];
+  if (cfg.userFormat === 'local') return local;
+  if (cfg.userFormat === 'domain') return cfg.domain ? `${cfg.domain}\\${local}` : local;
+  return user.email;
 }
+/** IP de origen con la que este servidor llega al servidor RADIUS (la que hay que dar de alta como cliente). */
+function sourceAddress(host, port) {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket(net.isIPv6(host) ? 'udp6' : 'udp4');
+    const done = (v) => { try { sock.close(); } catch { /* nada */ } resolve(v); };
+    sock.on('error', () => done(''));
+    try { sock.connect(Number(port) || 1812, host, () => { try { done(sock.address().address); } catch { done(''); } }); } catch { done(''); }
+  });
+}
+module.exports.sourceAddress = sourceAddress;
 module.exports.radiusConfig = radiusConfig;
 module.exports.usesRadius = usesRadius;
 module.exports.radiusUsername = radiusUsername;

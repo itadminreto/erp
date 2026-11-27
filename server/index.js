@@ -62,8 +62,9 @@ app.post('/api/login', wrap(async (req, res) => {
   else if (radius.usesRadius(rcfg, u)) {
     try {
       const r = await radius.authenticate({ ...rcfg, username: radius.radiusUsername(rcfg, u), password, callingStation: req.ip });
+      if (!r.ok) console.warn(`RADIUS ${r.server}: ${r.code} para «${radius.radiusUsername(rcfg, u)}»${r.message ? ` (${r.message})` : ''}`);
       ok = r.ok; via = `RADIUS ${r.server}`;
-      if (!ok) await failed(r.code === 'challenge' ? 'RADIUS pide un segundo factor, no admitido' : 'rechazado por RADIUS');
+      if (!ok) await failed(`${r.code === 'challenge' ? 'RADIUS pide un segundo factor, no admitido' : 'rechazado por RADIUS'} ${r.server} como «${radius.radiusUsername(rcfg, u)}»${r.message ? `: ${r.message}` : ''}`);
     } catch (e) {
       if (e.status) throw e;
       if (rcfg.fallback && u.password_hash) { ok = verify(password, u.password_hash); via = 'local (RADIUS sin respuesta)'; }

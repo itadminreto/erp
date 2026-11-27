@@ -17,7 +17,7 @@ before(async () => {
     const ma = msg.indexOf(Buffer.from([80, 18]), 20);
     const copy = Buffer.from(msg); copy.fill(0, ma + 2, ma + 18);
     const okMa = ma === 20 && crypto.createHmac('md5', SECRET).update(copy).digest().equals(msg.subarray(ma + 2, ma + 18));
-    seen.push({ user: req.attributes['User-Name'], okMa, nas: req.attributes['NAS-Identifier'] });
+    seen.push({ user: req.attributes['User-Name'], okMa, nas: req.attributes['NAS-Identifier'], cli: req.attributes['Calling-Station-Id'], nasIp: req.attributes['NAS-IP-Address'] });
     if (mode === 'silent') return;
     const good = req.attributes['User-Name'] === 'ana' && req.attributes['User-Password'] === 'clave larga con ñ y más de 16 caracteres';
     const res = radiusLib.encode_response({ packet: req, code: good ? 'Access-Accept' : 'Access-Reject', secret: mode === 'badsecret' ? 'otro' : SECRET,
@@ -50,6 +50,20 @@ test('RADIUS: ignora respuestas con otro secreto y avisa si el servidor no respo
   mode = 'normal';
   const r = await radius.authenticate({ ...base(), servers: [{ host: '127.0.0.1', port: 9 }, { host: '127.0.0.1', port }], username: 'ana', password: 'mala' });
   assert.equal(r.code, 'reject');
+});
+
+test('RADIUS: la IP del usuario (Calling-Station-Id) solo se envía si se activa; NAS-IP-Address opcional; DOMINIO\\usuario', async () => {
+  mode = 'normal'; seen.length = 0;
+  await radius.authenticate({ ...base(), username: 'ana', password: 'x', callingStation: '192.168.0.55' });
+  assert.equal(seen[0].cli, undefined, 'por defecto no se envía');
+  await radius.authenticate({ ...base(), username: 'ana', password: 'x', callingStation: '192.168.0.55', sendCallingStation: true, nasIp: '192.168.0.201' });
+  assert.equal(seen[1].cli, '192.168.0.55');
+  assert.equal(seen[1].nasIp, '192.168.0.201');
+  const u = { email: 'ana.lopez@asociacion.org' };
+  assert.equal(radius.radiusUsername({ userFormat: 'domain', domain: 'ASOCIACION' }, u), 'ASOCIACION\\ana.lopez');
+  assert.equal(radius.radiusUsername({ userFormat: 'local' }, u), 'ana.lopez');
+  assert.equal(radius.radiusUsername({ userFormat: 'email' }, { ...u, radius_username: 'alopez' }), 'alopez');
+  assert.equal(await radius.sourceAddress('127.0.0.1', port), '127.0.0.1');
 });
 
 module.exports = { SECRET };
