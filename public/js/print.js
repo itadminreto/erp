@@ -32,6 +32,22 @@ const CSS = `
   .deleted td { color: #b00; text-decoration: line-through; }
   footer { margin-top: 12px; font-size: 8pt; color: #777; }
 
+  /* ----- informes (listados configurables) ----- */
+  .rgroup { margin-bottom: 14px; }
+  .rgroup.pb { page-break-before: always; break-before: page; }
+  .rg { font-size: 12pt; margin: 4px 0 6px; padding: 4px 8px; background: #eef0f5; border-left: 4px solid #4f46e5; }
+  .rg span { font-size: 9pt; font-weight: 400; color: #555; margin-left: 6px; }
+  table.rep th { font-size: 8.5pt; }
+  table.rep td { font-size: 9pt; }
+  table.rep td.num { font-weight: 700; white-space: nowrap; }
+  table.rep th.blank { min-width: 22mm; background: #f7f7f7; }
+  table.rep td.blank { height: 9mm; }
+  .rcards { display: grid; gap: 6px; }
+  .rcard { border: 1px solid #c9ced6; border-radius: 5px; padding: 5px 7px 7px; page-break-inside: avoid; }
+  .rc-h { font-weight: 700; font-size: 10.5pt; margin-bottom: 4px; }
+  .rep-empty { color: #666; font-style: italic; }
+  .rep-notes { font-size: 8.5pt; color: #444; margin-top: 10px; white-space: pre-wrap; }
+
   /* ----- parte / ficha profesional ----- */
   .doc { color: #1f2937; }
   .doc-head { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: stretch; padding-bottom: 10px; border-bottom: 3px solid var(--accent); }

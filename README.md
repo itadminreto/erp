@@ -102,6 +102,15 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 | **Responsive e intuitivo** | Menú lateral plegable, tablas que pasan a tarjetas en móvil, formularios a pantalla completa en móvil, tema claro/oscuro. |
 | **Datos generales (super admin)** | Empresas, centros, usuarios, roles, aplicaciones/campos y ajustes (nombre, URL pública, SMTP). |
 
+## Imprimir e informes
+
+El botón **🖨 Imprimir ▾** de cada aplicación ofrece: la lista actual, **«Elegir campos a imprimir…»** (marcar y ordenar
+campos, agrupar, apaisado, columnas en blanco y firma) y los **informes guardados**. El super admin los crea en
+**Apps y campos → (app) → Informes** o desde «Guardar como informe…». Cada informe tiene campos y orden, agrupación
+(p. ej. por grupo de trabajo, una hoja por grupo), campo de fecha y periodo por defecto (hoy, mañana, semana…),
+solo abiertos, tabla o fichas, columnas en blanco para rellenar a mano y firma. Al lanzarlo se elige día/periodo,
+grupo y centro, y se imprime o descarga en PDF. Recados trae **«Parte diario por grupo»** (citas de hoy).
+
 ## Grupos de trabajo por sede
 
 **Super admin → Grupos de trabajo**: cada grupo pertenece a una sede (centro) y tiene código, nombre, notas y estado,

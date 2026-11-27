@@ -241,6 +241,12 @@ router.get('/', wrap(async (req, res) => {
   res.json(out);
 }));
 
+// informes guardados de la app (los define el super admin)
+router.get('/:appKey/reports', wrap(async (req, res) => {
+  const rows = await all('SELECT id, name, config FROM app_reports WHERE app_id = ? AND deleted_at IS NULL ORDER BY sort, name', req.appDef.id);
+  res.json(rows.map((r) => ({ ...r, config: JSON.parse(r.config) })));
+}));
+
 router.get('/:appKey', wrap(async (req, res) => {
   const layouts = {};
   for (const l of await all('SELECT kind, config FROM user_layouts WHERE user_id = ? AND app_id = ?', req.user.id, req.appDef.id)) {

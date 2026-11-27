@@ -514,3 +514,12 @@ textarea.voice-input { min-height: 120px; }
 .date-filter { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .date-filter > select { flex: 0 1 230px; }
 .date-filter input[type=date] { width: auto; }
+
+/* ---------- editor de informes ---------- */
+.rep-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; }
+.rep-editor .stack, .rep-left, .rep-right { display: flex; flex-direction: column; gap: 10px; }
+.rep-h { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 6px 0 0; }
+.rep-cols { max-height: 52vh; overflow-y: auto; }
+.rep-cols .sort-item { padding: 5px 8px; }
+.rep-cols .up, .rep-cols .down { padding: 2px 7px; min-height: 0; font-size: .7rem; }
+@media (max-width: 760px) { .rep-editor { grid-template-columns: 1fr; } }

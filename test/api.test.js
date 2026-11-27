@@ -723,3 +723,34 @@ test('recados: cita con el cliente (fecha y hora) y filtros por rango de fechas'
   assert.ok(!(await titles('f_fecha_realizado__empty=0')).includes('Sin cita'));
   assert.equal((await admin.call('GET', '/apps/recados/records?f_fecha_realizado__from=mañana')).status, 400);
 });
+
+test('informes configurables: el de Recados por defecto, validación, CRUD de super admin y lectura para usuarios', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const rec = apps.find((a) => a.key === 'recados');
+  const list = (await admin.call('GET', `/admin/apps/${rec.id}/reports`)).body;
+  const daily = list.find((r) => r.name === 'Parte diario por grupo');
+  assert.ok(daily, 'informe por defecto');
+  assert.equal(daily.config.group_by, 'grupo');
+  assert.equal(daily.config.date_field, 'fecha_realizado');
+  assert.equal(daily.config.period, 'today');
+  assert.ok(daily.config.page_per_group && daily.config.blank_cols.length);
+  // validación
+  assert.equal((await admin.call('POST', `/admin/apps/${rec.id}/reports`, { name: 'X', config: { columns: [] } })).status, 400);
+  assert.equal((await admin.call('POST', `/admin/apps/${rec.id}/reports`, { name: 'X', config: { columns: ['titulo'], group_by: 'titulo' } })).status, 400);
+  const sig = rec.fields.find((f) => f.type === 'signature');
+  if (sig) assert.equal((await admin.call('POST', `/admin/apps/${rec.id}/reports`, { name: 'X', config: { columns: [sig.key] } })).status, 400, 'las firmas no son columnas');
+  assert.equal((await admin.call('POST', `/admin/apps/${rec.id}/reports`, { name: '', config: { columns: ['titulo'] } })).status, 400);
+  const c = await admin.call('POST', `/admin/apps/${rec.id}/reports`, { name: 'Pendientes por técnico', config: { columns: ['_num', 'titulo', 'nope'], group_by: 'asignado_a', blank_cols: 'Hora, Firma', only_open: true } });
+  assert.equal(c.status, 201);
+  assert.deepEqual(c.body.config.columns, ['_num', 'titulo'], 'descarta campos que no existen');
+  assert.deepEqual(c.body.config.blank_cols, ['Hora', 'Firma']);
+  const u = await admin.call('PUT', `/admin/reports/${c.body.id}`, { name: 'Pendientes por técnico (v2)', config: { columns: ['titulo'], layout: 'cards' } });
+  assert.equal(u.body.config.layout, 'cards');
+  // los usuarios con acceso a la app los ven; sin acceso, no
+  const ana = client(); await ana.login('ana@test.com', 'anapass123');
+  const seen = (await ana.call('GET', '/apps/recados/reports')).body.map((r) => r.name);
+  assert.ok(seen.includes('Parte diario por grupo') && seen.includes('Pendientes por técnico (v2)'));
+  assert.equal((await ana.call('POST', `/admin/apps/${rec.id}/reports`, { name: 'Y', config: { columns: ['titulo'] } })).status, 403);
+  await admin.call('DELETE', `/admin/reports/${c.body.id}`);
+  assert.ok(!(await ana.call('GET', '/apps/recados/reports')).body.some((r) => r.id === c.body.id));
+});

@@ -1,10 +1,11 @@
 // Vista de una aplicación: listado, formulario dinámico, papelera, historial, importación/exportación y envío de contraseñas.
 import {
-  api, h, clear, toast, toastErr, modal, confirmDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
+  api, h, clear, toast, toastErr, modal, confirmDlg, promptDlg, dropdown, fmtDate, fmtDateTime, debounce, download,
   genPassword, copy, sortable, ACTION_LABELS, state, ipMask, signaturePad, prepareImage, imageViewer, webcamPhoto, canUseWebcam,
   announce, pressable, a11yOn,
 } from './core.js';
 import { printDoc, docPdf, blobToBase64, esc } from './print.js';
+import { editReport, REPORT_PERIODS } from './reports.js';
 
 const MASK = '••••••••';
 const META_COLS = {
@@ -16,7 +17,7 @@ const META_COLS = {
 };
 
 export async function renderApp(root, key, onCountsChanged) {
-  const meta = await api('/apps/' + key);
+  const [meta, reports] = await Promise.all([api('/apps/' + key), api(`/apps/${key}/reports`).catch(() => [])]);
   const fieldsByKey = Object.fromEntries(meta.fields.map((f) => [f.key, f]));
   const usersById = { ...Object.fromEntries(Object.entries(meta.user_names || {}).map(([id, name]) => [id, { id: Number(id), name }])), ...Object.fromEntries(meta.users.map((u) => [u.id, u])) };
   const P = meta.perms;
@@ -98,7 +99,18 @@ export async function renderApp(root, key, onCountsChanged) {
   ]) : null;
   const importBtn = P.import ? h('button.btn', { onclick: () => openImport() }, '⬆ ', h('span.lbl', 'Importar')) : null;
   const colsBtn = h('button.btn', { title: 'Columnas', onclick: () => openColumns() }, '☰ ', h('span.lbl', 'Columnas'));
-  const printBtn = h('button.btn', { title: 'Imprimir', onclick: () => (st.view === 'calendar' ? printCalendar() : printList()) }, '🖨 ', h('span.lbl', 'Imprimir'));
+  // menú Imprimir: vista actual, eligiendo campos, informes guardados
+  const printItems = () => [
+    { label: st.view === 'calendar' ? '📅 Calendario actual' : '☰ Lista actual (columnas visibles)', onclick: () => (st.view === 'calendar' ? printCalendar() : printList()) },
+    { label: '☑ Elegir campos a imprimir…', onclick: () => adhocReport() },
+    reports.length ? '-' : null,
+    ...reports.map((rp) => ({ label: `📄 ${rp.name}`, onclick: () => runReport(rp) })),
+    state.me.is_superadmin ? '-' : null,
+    state.me.is_superadmin ? { label: '⚙ Gestionar informes…', onclick: () => { location.hash = '#/admin/apps'; sessionStorage.setItem('adminApp', meta.app.id); } } : null,
+  ];
+  const printBtn = h('div', { style: { display: 'contents' } });
+  const drawPrintBtn = () => clear(printBtn, dropdown(h('button.btn', { title: 'Imprimir e informes' }, '🖨 ', h('span.lbl', 'Imprimir'), ' ▾'), printItems()));
+  drawPrintBtn();
   const viewBtns = dateFields.length ? h('div.seg', { role: 'group', 'aria-label': 'Vista' },
     h('button', { class: st.view === 'list' ? 'on' : '', onclick: () => setView('list') }, '☰ Lista'),
     h('button', { class: st.view === 'calendar' ? 'on' : '', onclick: () => setView('calendar') }, '📅 Calendario')) : null;
@@ -216,7 +228,9 @@ export async function renderApp(root, key, onCountsChanged) {
     P.import ? { label: '⬆ Importar', onclick: () => openImport() } : null,
     P.export ? { label: '📊 Exportar a Excel', onclick: () => doExport('xlsx') } : null,
     P.export ? { label: '📄 Exportar a CSV', onclick: () => doExport('csv') } : null,
-    { label: '🖨 Imprimir', onclick: () => (st.view === 'calendar' ? printCalendar() : printList()) },
+    { label: '🖨 Imprimir vista actual', onclick: () => (st.view === 'calendar' ? printCalendar() : printList()) },
+    { label: '☑ Elegir campos a imprimir…', onclick: () => adhocReport() },
+    ...reports.map((rp) => ({ label: `📄 ${rp.name}`, onclick: () => runReport(rp) })),
   ]);
 
   const bulkBar = h('div.bulkbar', { hidden: true });
@@ -285,6 +299,145 @@ export async function renderApp(root, key, onCountsChanged) {
     if (st.q) parts.push(`búsqueda «${st.q}»`);
     return parts.join(' · ');
   }
+  // ----- informes (listados configurables) -----
+  async function fetchAllRows(qs) {
+    qs.set('size', 1000);
+    let rows = [], page = 1, total = 0;
+    do { qs.set('page', page); const r = await api(`/apps/${key}/records?${qs}`); rows = rows.concat(r.rows); total = r.total; page++; } while (rows.length < total && page <= 10);
+    return rows;
+  }
+  const sortParam = (k) => (!k ? 'number' : META_COLS[k] ? (META_COLS[k].sortKey || 'number') : k);
+  function groupKeyLabel(cfg, r) {
+    const g = cfg.group_by;
+    if (g === '_center') return [String(r.center_id || ''), r.center_name ? `${r.center_code ? r.center_code + ' · ' : ''}${r.center_name}` : ''];
+    const v = r.data[g];
+    if (v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length)) return ['', ''];
+    const f = fieldsByKey[g];
+    if (f.type === 'checkbox') return [v ? '1' : '0', v ? 'Sí' : 'No'];
+    if (f.type === 'user') return [String(v), usersById[v] ? usersById[v].name : `#${v}`];
+    if (f.type === 'group') return [String(v), groupsById[v] ? groupLabel(groupsById[v]) : `Grupo #${v}`];
+    return [String(v), String(v)];
+  }
+  /** HTML del informe: un bloque por grupo (opcionalmente en hoja nueva), tabla o fichas, columnas en blanco y firma. */
+  function reportBody(rows, cfg, { timeOnly = false } = {}) {
+    const cols = cfg.columns.filter((k) => META_COLS[k] || fieldsByKey[k]);
+    const lbl = (k) => (META_COLS[k] ? META_COLS[k].label : fieldsByKey[k].label);
+    const val = (r, k) => {
+      const f = fieldsByKey[k];
+      if (timeOnly && f && f.type === 'datetime' && k === cfg.date_field && r.data[k]) return String(r.data[k]).slice(11, 16);
+      return cellText(r, k);
+    };
+    const blank = cfg.blank_cols || [];
+    // grupos
+    const groups = new Map();
+    for (const r of rows) {
+      const [gk, gl] = cfg.group_by ? groupKeyLabel(cfg, r) : ['', ''];
+      if (!groups.has(gk)) groups.set(gk, { label: gl, rows: [] });
+      groups.get(gk).rows.push(r);
+    }
+    const list = [...groups.values()].sort((a, b) => (!a.label) - (!b.label) || a.label.localeCompare(b.label, 'es'));
+    const gName = cfg.group_by === '_center' ? 'Centro' : cfg.group_by ? fieldsByKey[cfg.group_by].label : '';
+    const table = (rs) => `<table class="rep"><thead><tr>${cols.map((k) => `<th>${esc(lbl(k))}</th>`).join('')}${blank.map((b) => `<th class="blank">${esc(b)}</th>`).join('')}</tr></thead>
+      <tbody>${rs.map((r) => `<tr>${cols.map((k) => `<td${k === '_num' ? ' class="num"' : ''}>${esc(val(r, k))}</td>`).join('')}${blank.map(() => '<td class="blank"></td>').join('')}</tr>`).join('')}</tbody></table>`;
+    const cards = (rs) => `<div class="rcards">${rs.map((r) => `<div class="rcard"><div class="rc-h">Nº ${esc(r.number)}${r.data[meta.app.title_field] ? ' · ' + esc(r.data[meta.app.title_field]) : ''}</div>
+      <div class="grid">${cols.filter((k) => k !== '_num' && k !== meta.app.title_field).map((k) => {
+        const f = fieldsByKey[k]; const span = f && f.type === 'textarea' ? 12 : 4;
+        const v = val(r, k);
+        return `<div class="box s${span}"><div class="l">${esc(lbl(k))}</div><div class="v${v ? '' : ' nil'}">${v ? esc(v) : '—'}</div></div>`;
+      }).join('')}${blank.map((b) => `<div class="box s4"><div class="l">${esc(b)}</div><div class="v nil">&nbsp;</div></div>`).join('')}</div></div>`).join('')}</div>`;
+    if (!rows.length) return '<p class="rep-empty">No hay registros para estos criterios.</p>';
+    return list.map((g, i) => `<section class="rgroup${cfg.page_per_group && i > 0 ? ' pb' : ''}">
+      ${cfg.group_by ? `<h2 class="rg">${esc(gName)}: ${esc(g.label || '(sin asignar)')} <span>${g.rows.length} registro${g.rows.length === 1 ? '' : 's'}</span></h2>` : ''}
+      ${cfg.layout === 'cards' ? cards(g.rows) : table(g.rows)}
+      ${cfg.signature ? `<div class="firma"><div>${esc(cfg.signature)}</div><div>Fecha y hora</div></div>` : ''}
+    </section>`).join('') + (cfg.notes ? `<p class="rep-notes">${esc(cfg.notes)}</p>` : '')
+      + `<footer>${rows.length} registro${rows.length === 1 ? '' : 's'}</footer>`;
+  }
+  async function outputReport(action, title, subtitle, bodyHtml, landscape) {
+    const doc = { title, subtitle, bodyHtml, landscape };
+    if (action === 'pdf') {
+      toast('Generando PDF…');
+      const blob = await docPdf(doc);
+      const a = h('a', { href: URL.createObjectURL(blob), download: `${title}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9_-]+/g, '_') + '.pdf' });
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } else printDoc(doc);
+  }
+  /** Imprimir eligiendo campos: lo que se ve ahora (filtros, búsqueda, selección) con los campos elegidos. */
+  async function adhocReport() {
+    const res = await editReport({ fields: meta.fields, app: meta.app, mode: 'print', canSave: state.me.is_superadmin,
+      defaults: { columns: columns.slice(), sort: st.sort ? (Object.keys(META_COLS).find((k) => META_COLS[k].sortKey === st.sort) || st.sort) : '', dir: st.dir || 'asc', landscape: columns.length > 6 } });
+    if (!res) return;
+    if (res.action === 'saveas') {
+      const v = await promptDlg('Guardar como informe', [{ key: 'name', label: 'Nombre del informe', required: true, placeholder: 'Ej.: Trabajos del día' }], { ok: 'Guardar' });
+      const name = v && v.name.trim();
+      if (!name) return;
+      try {
+        const saved = await api(`/admin/apps/${meta.app.id}/reports`, { method: 'POST', body: { name, config: res.config } });
+        reports.push(saved); drawPrintBtn(); toast('Informe guardado: ya está en el menú Imprimir', 'ok');
+      } catch (e) { toastErr(e); }
+      return;
+    }
+    try {
+      const qs = filterQS();
+      if (st.trash) qs.set('trash', '1');
+      qs.set('sort', sortParam(res.config.sort)); qs.set('dir', res.config.dir);
+      if (res.config.only_open) qs.set('state', 'open');
+      let rows = await fetchAllRows(qs);
+      if (st.selected.size) rows = rows.filter((x) => st.selected.has(x.id));
+      await outputReport(res.action, meta.app.name, filterSummary(), reportBody(rows, res.config), res.config.landscape);
+    } catch (e) { toastErr(e); }
+  }
+  /** Lanza un informe guardado: se eligen periodo, grupo y centro, y se imprime o se descarga en PDF. */
+  async function runReport(rp) {
+    const cfg = rp.config;
+    const df = cfg.date_field && fieldsByKey[cfg.date_field];
+    const per = h('select', { id: 'rr-per' }, [...REPORT_PERIODS, ['range', 'Entre dos fechas…']].map(([v, l]) => h('option', { value: v, selected: (cfg.period || '') === v }, v === '' ? 'Todas las fechas' : l)));
+    const from = h('input', { type: 'date', 'aria-label': 'Desde' }); const to = h('input', { type: 'date', 'aria-label': 'Hasta' });
+    const one = h('input', { type: 'date', id: 'rr-one', 'aria-label': 'Día' });
+    const range = h('div.row', { style: { gap: '6px', flexWrap: 'nowrap' } }, from, h('span.muted.small', 'a'), to);
+    const syncPer = () => { range.hidden = per.value !== 'range'; };
+    per.addEventListener('change', syncPer); syncPer();
+    const gf = cfg.group_by && cfg.group_by !== '_center' ? fieldsByKey[cfg.group_by] : null;
+    const gOpts = !gf ? [] : gf.type === 'group' ? (meta.groups || []).filter((g) => g.active).map((g) => [g.id, groupLabel(g)])
+      : gf.type === 'user' ? meta.users.map((u) => [u.id, u.name]) : gf.type === 'select' ? (gf.options.choices || []).map((c) => [c, c]) : [];
+    const gSel = h('select', { id: 'rr-g' }, h('option', { value: '' }, 'Todos'), gOpts.map(([v, l]) => h('option', { value: v }, l)));
+    const cSel = h('select', { id: 'rr-c' }, h('option', { value: '' }, 'Todos los centros'), meta.centers.map((c) => h('option', { value: c.id, selected: String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
+    const onlyOpen = h('input', { type: 'checkbox', checked: !!cfg.only_open });
+    let action = null;
+    const m = modal({ title: `📄 ${rp.name}`, size: 'sm',
+      content: h('div.stack',
+        df ? h('div.field', h('label', { for: 'rr-per' }, `${df.label}`), per, range) : null,
+        gf && gOpts.length ? h('div.field', h('label', { for: 'rr-g' }, gf.label), gSel) : null,
+        meta.centers.length > 1 ? h('div.field', h('label', { for: 'rr-c' }, 'Centro'), cSel) : null,
+        meta.app.status_field ? h('label.check', onlyOpen, 'Solo abiertos') : null,
+        h('p.muted.small', `Campos: ${cfg.columns.map((k) => (META_COLS[k] ? META_COLS[k].label : fieldsByKey[k] ? fieldsByKey[k].label : k)).join(', ')}`)),
+      footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'),
+        h('button.btn', { onclick: () => { action = 'pdf'; m.close(); } }, '⬇ PDF'), h('button.btn.primary', { onclick: () => { action = 'print'; m.close(); } }, '🖨 Imprimir')],
+      onClose: async () => {
+        if (!action) return;
+        try {
+          const qs = new URLSearchParams();
+          if (cSel.value) qs.set('center', cSel.value);
+          if (onlyOpen.checked) qs.set('state', 'open');
+          if (gf && gSel.value) qs.set('f_' + gf.key, gSel.value);
+          const sub = [];
+          let single = false;
+          if (df && per.value) {
+            const r = per.value === 'range' ? { from: from.value, to: to.value } : presetRange(per.value);
+            if (r.from) qs.set(`f_${df.key}__from`, r.from);
+            if (r.to) qs.set(`f_${df.key}__to`, r.to);
+            single = !!r.from && r.from === r.to;
+            sub.push(`${df.label}: ${per.value === 'range' ? `${r.from ? fmtDate(r.from) : '…'} – ${r.to ? fmtDate(r.to) : '…'}` : (REPORT_PERIODS.find((x) => x[0] === per.value) || [, per.value])[1]}${single && per.value !== 'range' ? ` (${new Date(r.from + 'T12:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })})` : ''}`);
+          }
+          if (cSel.value) sub.push(cSel.selectedOptions[0].textContent);
+          if (gf && gSel.value) sub.push(`${gf.label}: ${gSel.selectedOptions[0].textContent}`);
+          qs.set('sort', sortParam(cfg.sort)); qs.set('dir', cfg.dir || 'asc');
+          const rows = await fetchAllRows(qs);
+          await outputReport(action, rp.name, sub.join(' · '), reportBody(rows, cfg, { timeOnly: single }), cfg.landscape);
+        } catch (e) { toastErr(e); }
+      } });
+  }
+
   async function printList() {
     try {
       const qs = filterQS();

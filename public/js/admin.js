@@ -1,5 +1,6 @@
 // Panel de super administración: empresas, centros, usuarios, roles/políticas, aplicaciones y campos, ajustes y auditoría.
 import { api, h, clear, toast, toastErr, modal, confirmDlg, promptDlg, fmtDate, fmtDateTime, download, debounce, sortable, PERM_LABELS, ACTION_LABELS, a11yOn } from './core.js';
+import { editReport } from './reports.js';
 
 const head = (title, sub, ...actions) => h('div.page-head', h('div.title', h('div', h('h1', title), sub ? h('div.muted.small', sub) : null)), h('div.btn-group', actions));
 
@@ -260,6 +261,7 @@ export async function renderAppsAdmin(root, onChange) {
   const loadEnt = async () => { for (const e of Object.keys(ENT)) entFields[e] = await api(`/admin/entity-fields/${e}?all=1`); };
   await loadEnt();
   let current = apps[0] ? apps[0].id : null;   // id de app o 'e:centers' / 'e:companies'
+  try { const want = Number(sessionStorage.getItem('adminApp')); sessionStorage.removeItem('adminApp'); if (apps.some((x) => x.id === want)) current = want; } catch { /* nada */ }
   const side = h('div.sort-list');
   const sideEnt = h('div.sort-list');
   const detail = h('div');
@@ -310,6 +312,7 @@ export async function renderAppsAdmin(root, onChange) {
     const target = { name: a.name,
       create: (body) => api(`/admin/apps/${a.id}/fields`, { method: 'POST', body }),
       update: (f, body) => api(`/admin/fields/${f.id}`, { method: 'PUT', body }) };
+    const reportsBox = h('div');
     const fieldsList = h('div.sort-list', a.fields.map((f) => fieldRow(f, () => editField(target, f),
       a.title_field === f.key ? h('span.chip', { style: { marginLeft: '6px' } }, 'Título') : null)));
     sortable(fieldsList, { handle: '.grip', onEnd: () => api(`/admin/apps/${a.id}/fields-order`, { method: 'PUT', body: { ids: [...fieldsList.children].map((e) => e.dataset.id) } }).then(reload).catch(toastErr) });
@@ -321,7 +324,37 @@ export async function renderAppsAdmin(root, onChange) {
         a.voice_fields && a.voice_fields !== '[]' ? h('a.btn', { href: '#/voz/' + a.key, title: 'Probar el asistente por voz para usuarios invidentes' }, '📞 Probar asistente') : null),
       h('div.row', h('h3', { style: { flex: 1 } }, 'Campos'), h('button.btn.primary.sm', { onclick: () => editField(target, null) }, '＋ Añadir campo')),
       fieldsList,
-      h('p.muted.small', 'Los campos no se borran: se desactivan para conservar los datos históricos. La clave interna no cambia aunque modifiques la etiqueta.')));
+      h('p.muted.small', 'Los campos no se borran: se desactivan para conservar los datos históricos. La clave interna no cambia aunque modifiques la etiqueta.'),
+      reportsBox));
+    // informes / listados imprimibles de la app
+    const activeFields = a.fields.filter((f) => f.active);
+    const editRep = async (rp) => {
+      const res = await editReport({ fields: activeFields, app: a, report: rp, mode: 'admin' });
+      if (!res) return;
+      try {
+        if (rp) await api(`/admin/reports/${rp.id}`, { method: 'PUT', body: { name: res.name, config: res.config } });
+        else await api(`/admin/apps/${a.id}/reports`, { method: 'POST', body: { name: res.name, config: res.config } });
+        toast('Informe guardado', 'ok'); loadReports();
+      } catch (e) { toastErr(e); }
+    };
+    async function loadReports() {
+      let list = [];
+      try { list = await api(`/admin/apps/${a.id}/reports`); } catch (e) { toastErr(e); }
+      const lbl = (k) => ({ _num: 'Nº', _center: 'Centro', _created_at: 'Creado', _updated_at: 'Modificado', _updated_by: 'Modificado por' }[k] || (activeFields.find((f) => f.key === k) || {}).label || k);
+      clear(reportsBox,
+        h('div.row', { style: { marginTop: '10px' } }, h('h3', { style: { flex: 1 } }, 'Informes (listados para imprimir)'), h('button.btn.primary.sm', { onclick: () => editRep(null) }, '＋ Nuevo informe')),
+        h('p.muted.small', 'Aparecen en el menú «Imprimir» de la aplicación para todos los que pueden verla. Eliges campos, orden, agrupación (p. ej. por grupo de trabajo), periodo, columnas en blanco y firma.'),
+        list.length ? h('div.sort-list', list.map((rp) => h('div.sort-item',
+          h('span', '📄'),
+          h('div.grow', h('strong', rp.name), h('div.muted.small', [rp.config.columns.map(lbl).join(', '), rp.config.group_by ? ` · agrupado por ${lbl(rp.config.group_by)}` : ''].join(''))),
+          h('button.btn.sm', { onclick: () => editRep(rp) }, 'Editar'),
+          h('button.btn.sm.ghost', { title: 'Eliminar informe', 'aria-label': `Eliminar informe ${rp.name}`, onclick: async () => {
+            if (!(await confirmDlg(`¿Eliminar el informe «${rp.name}»?`, { danger: true }))) return;
+            try { await api(`/admin/reports/${rp.id}`, { method: 'DELETE' }); loadReports(); } catch (e) { toastErr(e); }
+          } }, '🗑️'))))
+          : h('p.muted', 'Todavía no hay informes.'));
+    }
+    loadReports();
   }
   async function newApp() {
     const v = await promptDlg('Nueva aplicación', [{ key: 'name', label: 'Nombre *' }, { key: 'key', label: 'Clave (URL)', placeholder: 'ej. inventario', help: 'Minúsculas sin espacios. Si se deja vacía se genera a partir del nombre.' }, { key: 'icon', label: 'Icono (emoji)', value: '📁' }, { key: 'color', label: 'Color', type: 'color', value: '#64748b' }, { key: 'description', label: 'Descripción' }]);

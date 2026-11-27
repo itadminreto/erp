@@ -96,6 +96,16 @@ const SCHEMA = [
     KEY ix_wgm_user (user_id),
     CONSTRAINT fk_wgm_group FOREIGN KEY (group_id) REFERENCES work_groups(id)
   )`,
+  `CREATE TABLE IF NOT EXISTS app_reports (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    app_id INT NOT NULL,
+    name VARCHAR(150) NOT NULL,
+    config LONGTEXT NOT NULL,
+    sort INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME NULL,
+    KEY ix_app_reports_app (app_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(200) NOT NULL,
@@ -387,6 +397,17 @@ async function init() {
     }
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_layout_v1', '1')");
   }
+  // Informe «Parte diario por grupo» en Recados (si aún no tiene informes). Una sola vez.
+  const repDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_report_v1'");
+  if (!repDone.length) {
+    const [rec] = await pool.query("SELECT id FROM apps WHERE `key` = 'recados'");
+    if (rec && !(await pool.query('SELECT 1 FROM app_reports WHERE app_id = ?', [rec.id])).length) {
+      const { recadosDailyReport } = require('./reports');
+      const r = recadosDailyReport(await pool.query('SELECT `key`, type FROM fields WHERE app_id = ? AND active = 1', [rec.id]));
+      await pool.query('INSERT INTO app_reports (app_id, name, config) VALUES (?,?,?)', [rec.id, r.name, JSON.stringify(r.config)]);
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_report_v1', '1')");
+  }
   // El asistente de Recados pasa a preguntar todos los campos (menos firmas, imágenes y contraseñas). Una sola vez.
   const vaDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_voice_all_v1'");
   if (!vaDone.length) {
@@ -502,7 +523,7 @@ async function nextNumber(appId, companyId) {
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
 const BACKUP_TABLES = ['companies', 'centers', 'work_groups', 'work_group_members', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
-  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files'];
+  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files', 'app_reports'];
 
 const close = () => pool.end();
 

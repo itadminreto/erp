@@ -398,6 +398,43 @@ router.put('/apps/:id', wrap(async (req, res) => {
   if (changes.length) await audit(req, { entity: 'apps', entityId: before.id, action: 'update', summary: `Aplicación ${before.name}`, changes });
   res.json({ ok: true });
 }));
+// ---------- informes de cada app ----------
+const { cleanReport } = require('../reports');
+router.get('/apps/:id/reports', wrap(async (req, res) => {
+  const rows = await all('SELECT id, name, config, sort FROM app_reports WHERE app_id = ? AND deleted_at IS NULL ORDER BY sort, name', Number(req.params.id));
+  res.json(rows.map((r) => ({ ...r, config: JSON.parse(r.config) })));
+}));
+async function reportInput(req, appId) {
+  const app = await get('SELECT * FROM apps WHERE id = ?', appId);
+  if (!app) throw httpError(404, 'Aplicación no encontrada');
+  const name = String((req.body || {}).name || '').trim().slice(0, 150);
+  if (!name) throw httpError(400, 'Pon un nombre al informe');
+  let config;
+  try { config = cleanReport((req.body || {}).config, await appFields(app.id), app); } catch (e) { throw httpError(400, e.message); }
+  return { app, name, config };
+}
+router.post('/apps/:id/reports', wrap(async (req, res) => {
+  const { app, name, config } = await reportInput(req, Number(req.params.id));
+  const id = Number((await run('INSERT INTO app_reports (app_id, name, config) VALUES (?,?,?)', app.id, name, JSON.stringify(config))).lastInsertRowid);
+  await audit(req, { entity: 'reports', entityId: id, action: 'create', appId: app.id, summary: `Nuevo informe «${name}» en ${app.name}` });
+  res.status(201).json({ id, name, config });
+}));
+router.put('/reports/:id', wrap(async (req, res) => {
+  const before = await get('SELECT * FROM app_reports WHERE id = ? AND deleted_at IS NULL', Number(req.params.id));
+  if (!before) throw httpError(404, 'Informe no encontrado');
+  const { app, name, config } = await reportInput(req, before.app_id);
+  await run('UPDATE app_reports SET name = ?, config = ? WHERE id = ?', name, JSON.stringify(config), before.id);
+  await audit(req, { entity: 'reports', entityId: before.id, action: 'update', appId: app.id, summary: `Informe «${name}» modificado en ${app.name}` });
+  res.json({ id: before.id, name, config });
+}));
+router.delete('/reports/:id', wrap(async (req, res) => {
+  const r = await get('SELECT * FROM app_reports WHERE id = ? AND deleted_at IS NULL', Number(req.params.id));
+  if (!r) throw httpError(404, 'Informe no encontrado');
+  await run('UPDATE app_reports SET deleted_at = UTC_TIMESTAMP() WHERE id = ?', r.id);
+  await audit(req, { entity: 'reports', entityId: r.id, action: 'delete', appId: r.app_id, summary: `Informe «${r.name}» eliminado` });
+  res.json({ ok: true });
+}));
+
 /**
  * Diseño del formulario de una app (diseñador visual): orden de campos, secciones, anchos y modo pestañas.
  * body: { items: ['campo', { section: 'Título' }, 'campo2', ...], widths: { campo: 'md' }, tabs: bool }
