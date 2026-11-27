@@ -155,7 +155,8 @@ export async function renderUsers(root) {
     clear(box, h('div.table-wrap', h('table.data', h('thead', h('tr', ['Nombre', 'Email', 'Teléfono', 'Accesos', 'Último acceso', 'Estado', ''].map((t) => h('th.nosort', t)))),
       h('tbody', list.map((u) => h('tr', { class: u.deleted_at ? 'deleted' : '', onclick: () => !u.deleted_at && edit(u) },
         h('td', h('strong', u.name), u.is_superadmin ? h('span.chip.warn', { style: { marginLeft: '6px' } }, 'Super admin') : null,
-          u.accessible ? h('span.chip', { style: { marginLeft: '6px' }, title: 'Modo accesible activado' }, '♿ Accesible') : null),
+          u.accessible ? h('span.chip', { style: { marginLeft: '6px' }, title: 'Modo accesible activado' }, '♿ Accesible') : null,
+          u.auth_method === 'local' ? h('span.chip', { style: { marginLeft: '6px' }, title: 'Entra siempre con la contraseña local del ERP' }, '🔑 Local') : null),
         h('td', u.email), h('td', u.phone || ''),
         h('td', { style: { whiteSpace: 'normal' } }, u.assignments.map((a) => h('span.chip', { style: { margin: '2px' } }, `${a.company_name} › ${a.center_name || 'Todos'} › ${a.role_name}`))),
         h('td.small', fmtDateTime(u.last_login)),
@@ -170,6 +171,9 @@ export async function renderUsers(root) {
       password: h('input', { type: 'password', autocomplete: 'new-password', placeholder: u ? 'Dejar vacío para no cambiar' : 'Mínimo 8 caracteres' }),
       is_superadmin: h('input', { type: 'checkbox', checked: u ? !!u.is_superadmin : false }),
       accessible: h('input', { type: 'checkbox', checked: u ? !!u.accessible : false }),
+      auth_method: h('select', h('option', { value: '', selected: !u || u.auth_method !== 'local' }, 'Según Ajustes (RADIUS si está activado)'),
+        h('option', { value: 'local', selected: u && u.auth_method === 'local' }, 'Siempre contraseña local del ERP')),
+      radius_username: h('input', { value: u ? u.radius_username || '' : '', placeholder: 'Si es distinto del email (p. ej. ana.lopez)', autocomplete: 'off' }),
       active: h('input', { type: 'checkbox', checked: u ? !!u.active : true }),
       must_change_password: h('input', { type: 'checkbox', checked: u ? !!u.must_change_password : true }),
     };
@@ -189,13 +193,15 @@ export async function renderUsers(root) {
       title: u ? `Usuario · ${u.name}` : 'Nuevo usuario', size: '',
       content: h('div.stack',
         h('div.two-col', h('div.field', h('label', 'Nombre *'), f.name), h('div.field', h('label', 'Email (usuario de acceso) *'), f.email),
-          h('div.field', h('label', 'Teléfono (para WhatsApp/SMS)'), f.phone), h('div.field', h('label', u ? 'Nueva contraseña' : 'Contraseña inicial *'), f.password)),
+          h('div.field', h('label', 'Teléfono (para WhatsApp/SMS)'), f.phone), h('div.field', h('label', u ? 'Nueva contraseña (local)' : 'Contraseña inicial (local)'), f.password,
+            h('div.help', 'No hace falta si entra con RADIUS.')),
+          h('div.field', h('label', 'Autenticación'), f.auth_method), h('div.field', h('label', 'Usuario RADIUS'), f.radius_username)),
         h('div.row', h('label.check', f.active, 'Activo'), h('label.check', f.must_change_password, 'Debe cambiar la contraseña'), h('label.check', f.is_superadmin, 'Super administrador'),
           h('label.check', { title: 'Activa el modo para lector de pantalla y teclado, firma escribiendo el nombre y las opciones de ♿ Accesibilidad' }, f.accessible, '♿ Usuario invidente (modo accesible)')),
         h('div', h('h3', 'Accesos (empresa › centro › rol)'), h('p.muted.small', 'Un usuario puede tener varios roles en distintas empresas y centros. "Todos los centros" da acceso a toda la empresa.')),
         asgList, h('div', h('button.btn.sm', { onclick: () => addAsg() }, '＋ Añadir acceso'))),
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
-        const body = { name: f.name.value, email: f.email.value, phone: f.phone.value, is_superadmin: f.is_superadmin.checked, accessible: f.accessible.checked, active: f.active.checked, must_change_password: f.must_change_password.checked, assignments: [...asgList.querySelectorAll('.asg')].map((r) => r.get()) };
+        const body = { name: f.name.value, email: f.email.value, phone: f.phone.value, is_superadmin: f.is_superadmin.checked, accessible: f.accessible.checked, auth_method: f.auth_method.value, radius_username: f.radius_username.value, active: f.active.checked, must_change_password: f.must_change_password.checked, assignments: [...asgList.querySelectorAll('.asg')].map((r) => r.get()) };
         if (f.password.value) body.password = f.password.value;
         try { if (u) await api(`/admin/users/${u.id}`, { method: 'PUT', body }); else await api('/admin/users', { method: 'POST', body }); toast('Usuario guardado', 'ok'); m.close(); load(); } catch (e) { toastErr(e); }
       } }, 'Guardar')],
@@ -451,7 +457,54 @@ export async function renderSettings(root) {
           const body = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value]));
           try { await api('/admin/settings', { method: 'PUT', body }); toast('Ajustes guardados', 'ok'); } catch (e) { toastErr(e); }
         } }, 'Guardar'))),
+    radiusCard(s),
     backupCard(s));
+}
+
+// ---------- autenticación RADIUS (dentro de Ajustes) ----------
+function radiusCard(s) {
+  const inp = (k, attrs = {}) => h('input', { id: 'rad-' + k, value: s[k] || '', ...attrs });
+  const f = {
+    radius_enabled: h('input', { type: 'checkbox', checked: s.radius_enabled === '1' }),
+    radius_host: inp('radius_host', { placeholder: '192.168.0.10' }), radius_port: inp('radius_port', { placeholder: '1812', inputmode: 'numeric' }),
+    radius_host2: inp('radius_host2', { placeholder: 'Opcional' }), radius_port2: inp('radius_port2', { placeholder: '1812', inputmode: 'numeric' }),
+    radius_secret: inp('radius_secret', { type: 'password', autocomplete: 'new-password', placeholder: 'Secreto compartido (el mismo que en el servidor)' }),
+    radius_nas_id: inp('radius_nas_id', { placeholder: 'erp' }),
+    radius_timeout: inp('radius_timeout', { type: 'number', min: 1, max: 30, placeholder: '5' }), radius_retries: inp('radius_retries', { type: 'number', min: 0, max: 5, placeholder: '2' }),
+    radius_user_format: h('select', { id: 'rad-radius_user_format' }, h('option', { value: 'email', selected: s.radius_user_format !== 'local' }, 'El email completo (ana@asociacion.org)'),
+      h('option', { value: 'local', selected: s.radius_user_format === 'local' }, 'Solo la parte antes de la @ (ana)')),
+    radius_fallback: h('input', { type: 'checkbox', checked: s.radius_fallback === '1' }),
+  };
+  const fld = (l, el, help) => h('div.field', h('label', { for: el.id }, l), el, help ? h('div.help', help) : null);
+  const tUser = h('input', { id: 'rad-tu', autocomplete: 'off', placeholder: 'usuario' });
+  const tPass = h('input', { id: 'rad-tp', type: 'password', autocomplete: 'new-password' });
+  const result = h('div.small', { role: 'status' });
+  return h('div.card.card-pad.stack', { style: { maxWidth: '760px', marginTop: '16px' } },
+    h('h2', '🔐 Autenticación RADIUS'),
+    h('p.muted.small', 'Las contraseñas las valida vuestro servidor RADIUS (FreeRADIUS, NPS de Windows, etc.). Los usuarios, roles y centros se siguen gestionando aquí. El super administrador siempre puede entrar con su contraseña local. En el servidor RADIUS hay que dar de alta este ERP como cliente (NAS) con su IP y el mismo secreto. Se usa PAP con Message-Authenticator.'),
+    h('label.check', f.radius_enabled, h('strong', 'Activar autenticación RADIUS')),
+    h('div.two-col', fld('Servidor RADIUS', f.radius_host), fld('Puerto', f.radius_port), fld('Servidor secundario', f.radius_host2, 'Se usa si el principal no responde.'), fld('Puerto secundario', f.radius_port2),
+      fld('Secreto compartido', f.radius_secret), fld('NAS-Identifier', f.radius_nas_id, 'Nombre con el que se identifica el ERP ante el servidor.'),
+      fld('Espera por intento (segundos)', f.radius_timeout), fld('Reintentos', f.radius_retries),
+      fld('Usuario que se envía', f.radius_user_format, 'En cada usuario puedes poner un «Usuario RADIUS» distinto.')),
+    h('label.check', f.radius_fallback, 'Si el servidor RADIUS no responde, permitir la contraseña local del ERP'),
+    h('div.row', h('div.spacer'), h('button.btn.primary', { onclick: async () => {
+      const body = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value]));
+      try { await api('/admin/settings', { method: 'PUT', body }); toast('Ajustes de RADIUS guardados', 'ok'); } catch (e) { toastErr(e); }
+    } }, 'Guardar RADIUS')),
+    h('h3', 'Probar'),
+    h('p.muted.small', 'Prueba con un usuario y contraseña reales (usa los ajustes guardados).'),
+    h('div.row', { style: { alignItems: 'flex-end' } }, fld('Usuario', tUser), fld('Contraseña', tPass),
+      h('button.btn', { onclick: async () => {
+        clear(result, 'Probando…');
+        try {
+          const r = await api('/admin/settings/test-radius', { method: 'POST', body: { username: tUser.value, password: tPass.value } });
+          const txt = { accept: '✔ Aceptado (Access-Accept)', reject: '✕ Rechazado (Access-Reject): usuario o contraseña incorrectos', challenge: '⚠ El servidor pide un segundo paso (Access-Challenge): no está admitido', error: '⚠ Error' }[r.result];
+          clear(result, h('span.chip', { class: r.result === 'accept' ? 'ok' : r.result === 'reject' ? 'danger' : 'warn' }, txt), ' ', r.server ? `${r.server} · ` : '', `${r.ms} ms`, r.message ? h('div', r.message) : null);
+        } catch (e) { clear(result, h('span.chip.danger', e.message)); }
+        tPass.value = '';
+      } }, '🔌 Probar')),
+    result);
 }
 
 // ---------- copias de seguridad (dentro de Ajustes) ----------

@@ -29,7 +29,7 @@ async function boot() {
 function renderLogin() {
   startA11y(false);
   // la pantalla de acceso es accesible para todos (aún no se sabe quién entra)
-  const email = h('input', { id: 'login-email', type: 'email', autocomplete: 'username', placeholder: 'usuario@empresa.com', required: true });
+  const email = h('input', { id: 'login-email', type: 'text', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', placeholder: 'usuario@empresa.com', required: true });
   const pass = h('input', { id: 'login-pass', type: 'password', autocomplete: 'current-password', required: true });
   const err = h('p.error', { hidden: true, role: 'alert' });
   const btn = h('button.btn.primary.block', { type: 'submit' }, 'Entrar');
@@ -42,7 +42,7 @@ function renderLogin() {
     },
   }, h('h1.brand', { style: { padding: 0 } }, h('div.logo', 'G'), 'Gestión de Aplicaciones'),
   h('p.muted', 'Accede con tu usuario corporativo.'),
-  h('div.field', h('label', { for: 'login-email' }, 'Email'), email), h('div.field', h('label', { for: 'login-pass' }, 'Contraseña'), pass), err, btn));
+  h('div.field', h('label', { for: 'login-email' }, 'Email o usuario'), email), h('div.field', h('label', { for: 'login-pass' }, 'Contraseña'), pass), err, btn));
   document.title = 'Iniciar sesión · Gestión de Aplicaciones';
   setTimeout(() => email.focus(), 0);
 }
@@ -213,7 +213,8 @@ function changePassword(forced) {
   const m = modal({
     title: forced ? 'Cambia tu contraseña' : 'Mi perfil', size: 'sm',
     content: h('div.stack', forced ? h('p.muted', 'Por seguridad debes establecer una contraseña nueva antes de continuar.') : [h('div.field', h('label', 'Nombre'), name), h('div.field', h('label', 'Teléfono'), phone), h('h3', 'Cambiar contraseña')],
-      h('div.field', h('label', 'Contraseña actual'), cur), h('div.field', h('label', 'Nueva contraseña'), n1), h('div.field', h('label', 'Repite la nueva'), n2)),
+      state.me.password_managed === 'radius' && !forced ? h('p.muted.small', '🔐 Tu contraseña es la de la red de la organización (RADIUS): se cambia allí, no en esta aplicación.')
+        : [h('div.field', h('label', 'Contraseña actual'), cur), h('div.field', h('label', 'Nueva contraseña'), n1), h('div.field', h('label', 'Repite la nueva'), n2)]),
     footer: [h('div.spacer'), forced ? null : h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
       if (n1.value !== n2.value) return toast('Las contraseñas no coinciden', 'error');
       if (forced && !n1.value) return toast('Introduce una contraseña nueva', 'error');

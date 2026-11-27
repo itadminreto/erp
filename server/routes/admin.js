@@ -227,7 +227,7 @@ router.delete('/companies/:id/logo', wrap(async (req, res) => {
 // ---------- usuarios ----------
 router.get('/users', wrap(async (req, res) => {
   const trash = req.query.trash === '1';
-  const users = await all(`SELECT id, email, name, phone, is_superadmin, is_accessible, active, must_change_password, created_at, last_login, deleted_at
+  const users = await all(`SELECT id, email, name, phone, is_superadmin, is_accessible, auth_method, radius_username, active, must_change_password, created_at, last_login, deleted_at
                      FROM users ${trash ? '' : 'WHERE deleted_at IS NULL'} ORDER BY name`);
   const asg = await all(`SELECT a.*, r.name role_name, c.name company_name, ce.name center_name, ce.code center_code
                    FROM user_assignments a JOIN roles r ON r.id = a.role_id JOIN companies c ON c.id = a.company_id
@@ -237,7 +237,12 @@ router.get('/users', wrap(async (req, res) => {
 
 async function saveUser(req, before) {
   const b = req.body || {};
-  const d = pick(b, ['email', 'name', 'phone', 'is_superadmin', 'accessible', 'active', 'must_change_password']);
+  const d = pick(b, ['email', 'name', 'phone', 'is_superadmin', 'accessible', 'active', 'must_change_password', 'auth_method', 'radius_username']);
+  if ('auth_method' in d && !['', 'local', 'radius'].includes(d.auth_method)) throw httpError(400, 'Método de autenticación no válido');
+  if ('radius_username' in d) {
+    d.radius_username = String(d.radius_username || '').trim() || null;
+    if (d.radius_username && await get('SELECT id FROM users WHERE radius_username = ? AND id <> ? AND deleted_at IS NULL', d.radius_username, before ? before.id : 0)) throw httpError(409, 'Ese usuario RADIUS ya está asignado a otra persona');
+  }
   if ('accessible' in d) { d.is_accessible = d.accessible; delete d.accessible; } // «accessible» es palabra reservada en MariaDB
   if ('email' in d) { d.email = String(d.email).trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+$/.test(d.email)) throw httpError(400, 'Email no válido'); }
   if (!before && (!d.email || !String(d.name || '').trim())) throw httpError(400, 'Nombre y email obligatorios');
@@ -246,7 +251,8 @@ async function saveUser(req, before) {
   const dup = d.email && await get('SELECT id FROM users WHERE email = ? AND id <> ?', d.email, before ? before.id : 0);
   if (dup) throw httpError(409, 'Ya existe un usuario con ese email');
   if (b.password) { if (String(b.password).length < 8) throw httpError(400, 'La contraseña debe tener al menos 8 caracteres'); d.password_hash = hash(b.password); }
-  if (!before && !d.password_hash) throw httpError(400, 'Indica una contraseña inicial');
+  const viaRadius = radius.usesRadius(await radius.radiusConfig(), { auth_method: d.auth_method ?? (before ? before.auth_method : '') });
+  if (!before && !d.password_hash && !viaRadius) throw httpError(400, 'Indica una contraseña inicial');
 
   return tx(async () => {
     let id;
@@ -584,11 +590,14 @@ router.put('/apps/:id/fields-order', wrap(async (req, res) => {
 }));
 
 // ---------- ajustes ----------
-const SETTINGS = ['public_url', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass', 'smtp_from', 'app_name', 'backup_auto', 'backup_keep'];
+const SETTINGS = ['public_url', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass', 'smtp_from', 'app_name', 'backup_auto', 'backup_keep',
+  'radius_enabled', 'radius_host', 'radius_port', 'radius_host2', 'radius_port2', 'radius_secret', 'radius_timeout', 'radius_retries', 'radius_nas_id', 'radius_user_format', 'radius_fallback'];
+const SECRET_SETTINGS = ['smtp_pass', 'radius_secret'];
+const radius = require('../radius');
 router.get('/settings', wrap(async (req, res) => {
   const out = Object.fromEntries(SETTINGS.map((k) => [k, '']));
   for (const r of await all('SELECT `key`, value FROM settings')) if (r.key in out) out[r.key] = r.value || '';
-  out.smtp_pass = out.smtp_pass ? '••••••••' : '';
+  for (const k of SECRET_SETTINGS) out[k] = out[k] ? '••••••••' : '';
   if (out.backup_auto === '') out.backup_auto = '1';
   if (out.backup_keep === '') out.backup_keep = '14';
   res.json(out);
@@ -597,13 +606,35 @@ router.put('/settings', wrap(async (req, res) => {
   const changes = [];
   for (const k of SETTINGS) {
     if (!(k in (req.body || {}))) continue;
-    let v = String(req.body[k] ?? '');
-    if (k === 'smtp_pass') { if (v === '••••••••') continue; v = v ? encrypt(v) : ''; }
+    let v = String(req.body[k] ?? '').trim();
+    if (SECRET_SETTINGS.includes(k)) { if (v === '••••••••') continue; v = v ? encrypt(v) : ''; }
+    if (['radius_host', 'radius_host2'].includes(k) && v && !/^[A-Za-z0-9.:\-]+$/.test(v)) throw httpError(400, 'Servidor RADIUS no válido (IP o nombre)');
+    if (['radius_port', 'radius_port2'].includes(k) && v && !(Number(v) >= 1 && Number(v) <= 65535)) throw httpError(400, 'Puerto RADIUS no válido');
     await run('INSERT INTO settings (`key`, value) VALUES (?,?) ON DUPLICATE KEY UPDATE value = VALUES(value)', k, v);
-    changes.push({ field: k, from: '', to: k === 'smtp_pass' ? '••••' : v });
+    changes.push({ field: k, from: '', to: SECRET_SETTINGS.includes(k) ? '••••' : v });
+  }
+  const rc = await radius.radiusConfig();
+  if (rc.enabled && (!rc.servers.length || !rc.secret)) {
+    await run("UPDATE settings SET value = '0' WHERE `key` = 'radius_enabled'");
+    throw httpError(400, 'Para activar RADIUS indica el servidor y el secreto compartido (se ha dejado desactivado)');
   }
   await audit(req, { entity: 'settings', action: 'update', summary: 'Ajustes generales', changes });
   res.json({ ok: true });
+}));
+// prueba de RADIUS con los ajustes guardados
+router.post('/settings/test-radius', wrap(async (req, res) => {
+  const cfg = await radius.radiusConfig();
+  const { username = '', password = '' } = req.body || {};
+  if (!cfg.servers.length || !cfg.secret) throw httpError(400, 'Guarda primero el servidor y el secreto compartido');
+  if (!username || !password) throw httpError(400, 'Indica usuario y contraseña de prueba');
+  const t0 = Date.now();
+  let out;
+  try {
+    const r = await radius.authenticate({ ...cfg, username: String(username), password: String(password), callingStation: req.ip });
+    out = { result: r.code, message: r.message, server: r.server, ms: Date.now() - t0 };
+  } catch (e) { out = { result: 'error', message: e.message, ms: Date.now() - t0 }; }
+  await audit(req, { entity: 'settings', action: 'update', summary: `Prueba RADIUS con «${username}»: ${out.result}` });
+  res.json(out);
 }));
 router.post('/settings/test-mail', wrap(async (req, res) => {
   await sendMail({ to: req.body.to || req.user.email, subject: 'Prueba de correo', text: 'El correo saliente está configurado correctamente.' });

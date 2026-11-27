@@ -8,6 +8,7 @@ const { seed } = require('./seed');
 const { audit } = require('./audit');
 const { decrypt } = require('./crypto');
 const { getSetting } = require('./mailer');
+const radius = require('./radius');
 const { router: recordsRouter, wrap, httpError, fail } = require('./routes/records');
 const adminRouter = require('./routes/admin');
 
@@ -42,20 +43,42 @@ app.get('/api/health', wrap(async (req, res) => { await get('SELECT 1 ok'); res.
 const attempts = new Map();
 app.post('/api/login', wrap(async (req, res) => {
   const { email = '', password = '' } = req.body || {};
-  const k = `${req.ip}|${String(email).toLowerCase()}`;
+  const ident = String(email).trim();
+  const k = `${req.ip}|${ident.toLowerCase()}`;
   const a = attempts.get(k) || { n: 0, t: Date.now() };
   if (a.n >= 8 && Date.now() - a.t < 10 * 60e3) throw httpError(429, 'Demasiados intentos. Espera unos minutos.');
-  const u = await get('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL', String(email).trim());
-  if (!u || !u.active || !verify(password, u.password_hash)) {
+  const failed = async (detail) => {
     attempts.set(k, { n: a.n + 1, t: a.n === 0 ? Date.now() : a.t });
-    await audit(req, { entity: 'auth', action: 'login_failed', summary: `Acceso fallido: ${email}` });
-    throw httpError(401, 'Email o contraseña incorrectos');
-  }
+    await audit(req, { entity: 'auth', action: 'login_failed', summary: `Acceso fallido: ${ident}${detail ? ` (${detail})` : ''}` });
+    throw httpError(401, 'Usuario o contraseña incorrectos');
+  };
+  const rcfg = await radius.radiusConfig();
+  // se entra con el email o, si RADIUS está activo, también con el usuario RADIUS
+  let u = await get('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL', ident);
+  if (!u && rcfg.enabled && ident) u = await get('SELECT * FROM users WHERE radius_username = ? AND deleted_at IS NULL', ident);
+  if (!u || !u.active || !password) await failed(u && !u.active ? 'usuario desactivado' : '');
+  let ok = false, via = 'local';
+  if (u.is_superadmin && verify(password, u.password_hash)) ok = true; // el super admin siempre puede entrar en local (emergencia)
+  else if (radius.usesRadius(rcfg, u)) {
+    try {
+      const r = await radius.authenticate({ ...rcfg, username: radius.radiusUsername(rcfg, u), password, callingStation: req.ip });
+      ok = r.ok; via = `RADIUS ${r.server}`;
+      if (!ok) await failed(r.code === 'challenge' ? 'RADIUS pide un segundo factor, no admitido' : 'rechazado por RADIUS');
+    } catch (e) {
+      if (e.status) throw e;
+      if (rcfg.fallback && u.password_hash) { ok = verify(password, u.password_hash); via = 'local (RADIUS sin respuesta)'; }
+      else {
+        await audit(req, { entity: 'auth', action: 'login_failed', summary: `Acceso fallido: ${ident} (${e.message})` });
+        throw httpError(503, 'No se puede contactar con el servidor de autenticación (RADIUS). Inténtalo en unos minutos o avisa al administrador.');
+      }
+    }
+  } else ok = verify(password, u.password_hash);
+  if (!ok) await failed();
   attempts.delete(k);
   await createSession(res, u.id);
   await run(`UPDATE users SET last_login = UTC_TIMESTAMP() WHERE id = ?`, u.id);
   await run('DELETE FROM sessions WHERE expires_at < UTC_TIMESTAMP()');
-  await audit({ user: u, ip: req.ip }, { entity: 'auth', entityId: u.id, action: 'login', summary: 'Inicio de sesión' });
+  await audit({ user: u, ip: req.ip }, { entity: 'auth', entityId: u.id, action: 'login', summary: `Inicio de sesión${via === 'local' ? '' : ` (${via})`}` });
   res.json({ ok: true });
 }));
 app.post('/api/logout', wrap(async (req, res) => { await destroySession(req, res); res.json({ ok: true }); }));
@@ -64,7 +87,11 @@ app.get('/api/me', requireAuth, wrap(async (req, res) => {
   const u = req.user;
   res.json({
     id: u.id, name: u.name, email: u.email, phone: u.phone, is_superadmin: u.is_superadmin,
-    must_change_password: !!u.must_change_password, accessible: !!u.is_accessible,
+    ...(await (async () => {
+      const managed = radius.usesRadius(await radius.radiusConfig(), u); // contraseña gestionada por RADIUS
+      return { must_change_password: !!u.must_change_password && !managed, password_managed: managed ? 'radius' : '' };
+    })()),
+    accessible: !!u.is_accessible,
     companies: req.companies, company_id: req.companyId,
     app_name: await getSetting('app_name', 'Gestión de Aplicaciones'),
   });
@@ -74,6 +101,7 @@ app.put('/api/me', requireAuth, wrap(async (req, res) => {
   if (name !== undefined) await run('UPDATE users SET name = ? WHERE id = ?', String(name).trim() || req.user.name, req.user.id);
   if (phone !== undefined) await run('UPDATE users SET phone = ? WHERE id = ?', String(phone).trim(), req.user.id);
   if (new_password) {
+    if (radius.usesRadius(await radius.radiusConfig(), req.user)) throw httpError(400, 'Tu contraseña se gestiona en el servidor RADIUS (la de la red de la organización): cámbiala allí.');
     if (!verify(current_password || '', req.user.password_hash)) throw httpError(400, 'La contraseña actual no es correcta');
     if (String(new_password).length < 8) throw httpError(400, 'La nueva contraseña debe tener al menos 8 caracteres');
     await run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', hash(new_password), req.user.id);

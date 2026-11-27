@@ -102,6 +102,16 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 | **Responsive e intuitivo** | Menú lateral plegable, tablas que pasan a tarjetas en móvil, formularios a pantalla completa en móvil, tema claro/oscuro. |
 | **Datos generales (super admin)** | Empresas, centros, usuarios, roles, aplicaciones/campos y ajustes (nombre, URL pública, SMTP). |
 
+## Autenticación RADIUS
+
+En **Ajustes → Autenticación RADIUS**: servidor principal y secundario, puerto (1812), secreto compartido (cifrado),
+NAS-Identifier, espera y reintentos, formato del usuario (email completo o la parte antes de la @) y, opcionalmente,
+permitir la contraseña local si el servidor no responde. Botón **Probar** con un usuario real.
+Se usa PAP con Message-Authenticator y se verifica la respuesta (protección BlastRADIUS); UDP saliente al puerto 1812.
+En el servidor RADIUS hay que dar de alta el ERP como cliente (su IP y el mismo secreto).
+Los usuarios siguen existiendo en el ERP (roles, centros); en su ficha se puede indicar un **Usuario RADIUS** distinto
+o **«Siempre contraseña local»**. El **super admin** siempre puede entrar con su contraseña local.
+
 ## Imprimir e informes
 
 El botón **🖨 Imprimir ▾** de cada aplicación ofrece: la lista actual, **«Elegir campos a imprimir…»** (marcar y ordenar

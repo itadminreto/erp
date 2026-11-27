@@ -754,3 +754,67 @@ test('informes configurables: el de Recados por defecto, validación, CRUD de su
   await admin.call('DELETE', `/admin/reports/${c.body.id}`);
   assert.ok(!(await ana.call('GET', '/apps/recados/reports')).body.some((r) => r.id === c.body.id));
 });
+
+test('inicio de sesión con RADIUS: ajustes, prueba, usuarios RADIUS y locales, super admin y caída del servidor', async () => {
+  const dgram = require('dgram');
+  const radiusLib = require('radius');
+  const SECRET = 'otro-secreto';
+  let silent = false;
+  const srv = dgram.createSocket('udp4');
+  srv.on('message', (msg, rinfo) => {
+    if (silent) return;
+    const req = radiusLib.decode({ packet: msg, secret: SECRET });
+    const good = ['rosa', 'rosa@test.com'].includes(req.attributes['User-Name']) && req.attributes['User-Password'] === 'clave-del-dominio';
+    srv.send(radiusLib.encode_response({ packet: req, code: good ? 'Access-Accept' : 'Access-Reject', secret: SECRET }), rinfo.port, rinfo.address);
+  });
+  await new Promise((r) => srv.bind(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  try {
+    // no se puede activar sin servidor y secreto
+    assert.equal((await admin.call('PUT', '/admin/settings', { radius_enabled: '1', radius_host: '', radius_secret: '' })).status, 400);
+    assert.equal((await admin.call('GET', '/admin/settings')).body.radius_enabled, '0');
+    assert.equal((await admin.call('PUT', '/admin/settings', { radius_host: 'mal host;', radius_secret: 'x' })).status, 400);
+    const put = await admin.call('PUT', '/admin/settings', { radius_enabled: '1', radius_host: '127.0.0.1', radius_port: String(port), radius_secret: SECRET, radius_timeout: '1', radius_retries: '0', radius_user_format: 'local', radius_fallback: '0' });
+    assert.equal(put.status, 200);
+    const st = (await admin.call('GET', '/admin/settings')).body;
+    assert.equal(st.radius_secret, '••••••••', 'el secreto no se devuelve');
+    // probar desde Ajustes
+    assert.equal((await admin.call('POST', '/admin/settings/test-radius', { username: 'rosa', password: 'clave-del-dominio' })).body.result, 'accept');
+    assert.equal((await admin.call('POST', '/admin/settings/test-radius', { username: 'rosa', password: 'mala' })).body.result, 'reject');
+    // usuario nuevo sin contraseña local: entra con la del dominio (usuario = parte antes de la @)
+    const roles = (await admin.call('GET', '/admin/roles')).body.roles;
+    const cu = await admin.call('POST', '/admin/users', { name: 'Rosa', email: 'rosa@test.com', must_change_password: true, assignments: [{ company_id: ids.company, role_id: roles[0].id }] });
+    assert.equal(cu.status, 201, JSON.stringify(cu.body));
+    const rosa = client();
+    assert.equal((await rosa.login('rosa@test.com', 'mala')).status, 401);
+    assert.equal((await rosa.login('rosa@test.com', 'clave-del-dominio')).status, 200);
+    const me = (await rosa.call('GET', '/me')).body;
+    assert.equal(me.password_managed, 'radius');
+    assert.equal(me.must_change_password, false, 'no se le obliga a cambiar una contraseña que no es del ERP');
+    assert.equal((await rosa.call('PUT', '/me', { current_password: 'x', new_password: 'nuevaclave123' })).status, 400);
+    // también puede entrar con su usuario RADIUS
+    const rosa2 = client();
+    const users = (await admin.call('GET', '/admin/users')).body;
+    await admin.call('PUT', `/admin/users/${users.find((u) => u.email === 'rosa@test.com').id}`, { radius_username: 'rosa' });
+    assert.equal((await rosa2.login('rosa', 'clave-del-dominio')).status, 200);
+    // usuario marcado «siempre local»: no pasa por RADIUS
+    const ana = users.find((u) => u.email === 'ana@test.com');
+    await admin.call('PUT', `/admin/users/${ana.id}`, { auth_method: 'local' });
+    assert.equal((await client().login('ana@test.com', 'anapass123')).status, 200);
+    // el super admin entra siempre con su contraseña local
+    assert.equal((await client().login(process.env.ADMIN_EMAIL || 'admin@erp.local', process.env.ADMIN_PASSWORD || 'admin1234')).status, 200);
+    // servidor caído: error claro (503) y, con «permitir local», se usa la contraseña del ERP
+    silent = true;
+    assert.equal((await client().login('rosa@test.com', 'clave-del-dominio')).status, 503);
+    await admin.call('PUT', '/admin/settings', { radius_fallback: '1' });
+    const cl = await admin.call('PUT', `/admin/users/${users.find((u) => u.email === 'rosa@test.com').id}`, { password: 'local-rosa-123' });
+    assert.equal(cl.status, 200);
+    assert.equal((await client().login('rosa@test.com', 'local-rosa-123')).status, 200);
+    // auditoría del acceso por RADIUS
+    const aud = (await admin.call('GET', '/admin/audit?action=login&q=Rosa')).body.rows;
+    assert.ok(aud.some((r) => /RADIUS/.test(r.summary)));
+  } finally {
+    srv.close();
+    await admin.call('PUT', '/admin/settings', { radius_enabled: '0' });
+  }
+});

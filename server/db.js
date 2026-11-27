@@ -317,6 +317,9 @@ async function init() {
     KEY idx_files_record (record_id),
     CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Autenticación por usuario: '' = según Ajustes (RADIUS si está activado), 'local' = siempre contraseña del ERP
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_method VARCHAR(10) NOT NULL DEFAULT ''");
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS radius_username VARCHAR(200) NULL');
   // Modo accesible (lector de pantalla) solo para los usuarios marcados
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_accessible TINYINT(1) NOT NULL DEFAULT 0 AFTER is_superadmin');
   // Permiso propio «Enviar por correo»: al crearlo se concede a todos los roles que pueden ver la app
