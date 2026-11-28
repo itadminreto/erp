@@ -216,7 +216,12 @@
             "Activo",
             "En venta",
             "Baja"
-          ]
+          ],
+          "colors": {
+            "Activo": "#10b981",
+            "En venta": "#0ea5e9",
+            "Baja": "#94a3b8"
+          }
         }
       },
       {
@@ -898,7 +903,11 @@
               "choices": [
                 "Abierto",
                 "Cerrado"
-              ]
+              ],
+              "colors": {
+                "Abierto": "#f59e0b",
+                "Cerrado": "#94a3b8"
+              }
             }
           },
           {

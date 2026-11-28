@@ -103,7 +103,12 @@ async function importStructure(tpl, { forceLayout = false } = {}) {
     const hasSections = Array.isArray(lay.items) && lay.items.some((it) => it && typeof it === 'object' && 'section' in it);
     if (t.form_layout && (forceLayout || !hasSections)) props.form_layout = JSON.stringify(t.form_layout);
     if (forceLayout || !hasSections) { // con el diseño, también los anchos y altos de los campos
-      for (const f of t.fields || []) if (f.width) await run('UPDATE fields SET width = ?, height = ? WHERE app_id = ? AND `key` = ?', f.width, f.height || 1, app.id, f.key);
+      let order = 0;
+      for (const f of t.fields || []) {
+        await run('UPDATE fields SET sort = ? WHERE app_id = ? AND `key` = ?', order++, app.id, f.key); // orden de los campos (y de las columnas)
+        if (f.width) await run('UPDATE fields SET width = ?, height = ? WHERE app_id = ? AND `key` = ?', f.width, f.height || 1, app.id, f.key);
+        if (f.show_in_list !== undefined) await run('UPDATE fields SET show_in_list = ? WHERE app_id = ? AND `key` = ?', f.show_in_list ? 1 : 0, app.id, f.key); // columnas por defecto
+      }
     }
     const keys = Object.keys(props);
     if (keys.length) await run(`UPDATE apps SET ${keys.map((k) => `\`${k}\` = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => props[k]), app.id);

@@ -115,6 +115,19 @@ Guarda también `APP_SECRET` o `data/secret.key`.
   y **⬆ Importar estructura** en otra instalación (crea o completa; nunca borra). Plantilla de Vehículos en
   `deploy/plantillas/estructura-vehiculos.json` (recoge los datos del antiguo programa Delphi).
 
+### Carga del maestro de vehículos del antiguo programa (Delphi / SQL Server)
+
+Solo el maestro (hoja RET001 de la exportación a Excel, con sus tablas de códigos). **Por defecto solo simula**:
+
+    sudo bash /opt/erp/deploy/importar-vehiculos.sh /ruta/vehiculos.xls --empresa "Nombre de la empresa"
+    sudo bash /opt/erp/deploy/importar-vehiculos.sh /ruta/vehiculos.xls --empresa "Nombre de la empresa" --crear-centros --ejecutar
+
+Cada delegación va a un centro de coste (se busca por código o nombre; `--crear-centros` crea los que falten).
+Códigos → listas del ERP (aseguradora, tipo, ubicación, ámbito, motivo de baja, titular), fechas AAAAMMDD → fechas,
+estado Activo / En venta / Baja. Matrículas repetidas: se carga la que está en activo (o la más reciente).
+Las que ya existen en el ERP no se tocan, así que se puede repetir. Fechas imposibles: vacías. Todo va en una
+transacción: o se carga todo o nada. Deja un informe CSV (omitidas y avisos) junto al fichero.
+
 ## Panel del sistema (inicio del super admin)
 
 Tarjetas que se actualizan cada 30 s y se pueden ocultar u ordenar (**⚙ Personalizar**): **base de datos** (tamaño,

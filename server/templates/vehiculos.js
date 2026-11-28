@@ -28,7 +28,7 @@ const fields = [
   f('fecha_matriculacion', 'Fecha matriculación', 'date', 'sm'),
   f('tara', 'Tara (kg)', 'number', 'xs'), f('pma', 'PMA (kg)', 'number', 'xs'),
   // Estado y ubicación
-  f('estado', 'Estado', 'select', 'sm', { ...list, ...sel(['Activo', 'En venta', 'Baja']) }),
+  f('estado', 'Estado', 'select', 'sm', { ...list, options: { choices: ['Activo', 'En venta', 'Baja'], colors: { Activo: '#10b981', 'En venta': '#0ea5e9', Baja: '#94a3b8' } } }),
   f('ubicacion', 'Ubicación', 'select', 'sm', sel(UBICACIONES)),
   f('fecha_asignacion', 'Asignado al centro desde', 'date', 'sm'),
   f('km', 'Kilómetros', 'number', 'sm'),
@@ -97,7 +97,7 @@ const VEHICULOS = {
         title_field: 'descripcion', status_field: 'situacion', closed_values: ['Cerrado'],
         fields: [
           f('fecha', 'Fecha', 'date', 'sm', { required: 1, show_in_list: 1 }), f('aseguradora', 'Aseguradora', 'select', 'sm', { ...list, ...sel(ASEGURADORAS) }),
-          f('referencia', 'Referencia del siniestro', 'text', 'sm', list), f('situacion', 'Situación', 'select', 'sm', { ...list, ...sel(['Abierto', 'Cerrado']) }),
+          f('referencia', 'Referencia del siniestro', 'text', 'sm', list), f('situacion', 'Situación', 'select', 'sm', { ...list, options: { choices: ['Abierto', 'Cerrado'], colors: { Abierto: '#f59e0b', Cerrado: '#94a3b8' } } }),
           f('descripcion', 'Descripción', 'textarea', 'full', { ...list, height: 2 }),
         ],
         form_layout: layout([['Siniestro', ['fecha', 'aseguradora', 'referencia', 'situacion', 'descripcion']]]),

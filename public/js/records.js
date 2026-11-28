@@ -48,6 +48,7 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
   /** Color de una opción: en el campo de estado, abiertos en ámbar/azul y cerrados en verde/gris; en el resto, por orden. */
   function choiceColor(f, v) {
     const choices = f.options.choices || [];
+    if (f.options.colors && f.options.colors[v]) return f.options.colors[v]; // color fijo de la opción (p. ej. Activo verde, Baja gris)
     if (f.key === meta.app.status_field && closedVals.length) {
       const closedList = choices.filter((c) => closedVals.includes(c.toLowerCase())), openList = choices.filter((c) => !closedVals.includes(c.toLowerCase()));
       const ci = closedList.indexOf(v); if (ci >= 0) return CLOSED_COLORS[ci % CLOSED_COLORS.length];
@@ -57,6 +58,8 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
     const i = choices.indexOf(v); return i < 0 ? '#94a3b8' : PALETTE[i % PALETTE.length];
   }
   const hasStatus = !!(meta.app.status_field && fieldsByKey[meta.app.status_field] && closedVals.length);
+  // la primera vez, las apps con estado se abren en «Abiertos» (p. ej. vehículos en activo, sin los de baja)
+  if (hasStatus && !embedded) { let saved = null; try { saved = JSON.parse(sessionStorage.getItem(persistKey) || 'null'); } catch { /* nada */ } if (!saved || saved.state === undefined) st.state = 'open'; }
   const groupsById = Object.fromEntries((meta.groups || []).map((g) => [g.id, g]));
   const groupFields = meta.fields.filter((f) => f.type === 'group');
   const centerById = Object.fromEntries(meta.centers.map((c) => [c.id, c]));

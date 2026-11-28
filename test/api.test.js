@@ -947,3 +947,67 @@ test('vehículos: subapartados, traspasos con aceptación del centro de destino 
   assert.equal(again.apps_created.length, 0); assert.equal(again.fields_added, 0); assert.equal(again.reports_added, 0);
   assert.equal((await admin.call('POST', '/admin/structure', { structure: { format: 'otra' } })).status, 400);
 });
+
+test('carga del maestro de vehículos de Delphi: simulación, ejecución, repetida sin duplicar', async () => {
+  const XLSX = require('xlsx');
+  const { spawnSync } = require('child_process');
+  const os = require('os');
+  const wb = XLSX.utils.book_new();
+  const add = (name, rows) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name);
+  const base = { MAR: 'RENAULT', MOD: 'KANGOO', BAS: '', TIT: 'A', TIP: 2, FECMAT: 20170301, FECCOM: 0, CEN: 'S001', FECCEN: 0, TIPCEN: 0, NUMTAR: '', FECITV: 20270115, FECBAJ: 0, MOTBAJ: '', OBS: '', ESTREG: 0, ESTENV: 0,
+    CIA: 'M', POL: 'P-1', IMP: 263.06, FECALT: 0, VALCOM: 0, PRO: '', CON: '', ESTDES: '', LOC: 'GRANAD', FECVTO: 0, FVTARJ: 0, FATARJ: 0, FBTARJ: 0, MBTARJ: '', AMBTAR: 'PC', FBSEGU: 0, MBSEGU: '', FASEGU: 0, FVSEGU: 20271231, TIPOVE: 'FURG', TARA: 1637, PMA: 2300 };
+  add('RET001', [
+    { ...base, MAT: ' 9001 AAA' },
+    { ...base, MAT: '9001 AAA', FECBAJ: 20200101, MOTBAJ: 'V' },          // repetida: se queda la que está en activo
+    { ...base, MAT: '9002 BBB', TIT: 'S', CEN: 'CADI', FECMAT: 2250616 }, // fecha imposible
+    { ...base, MAT: 'V-4482-FV', FECBAJ: 20190505, MOTBAJ: 'D', CIA: 'MAFRE' },
+  ]);
+  add('RET005', [{ COD: 'M', NOM: 'MAFRE' }]);
+  add('RET006', [{ COD: 'S001', NOM: 'SANTANDER' }, { COD: 'CADI', NOM: 'CADIZ' }]);
+  add('RET008', [{ COD: 'PC', NOM: 'SERVICIO PARTICULAR' }]);
+  add('RET010', [{ COD: 'GRA', NOM: 'GRANADA' }]);
+  add('RET011', [{ COD: 'V', NOM: 'VENDIDO' }, { COD: 'D', NOM: 'DEFINITIVA' }]);
+  add('RET017', [{ COD: 'FURG', DES: 'FURGONETA' }]);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'delphi-'));
+  const xls = path.join(dir, 'vehiculos.xls');
+  XLSX.writeFile(wb, xls, { bookType: 'biff8' });
+  const runIt = (...a) => spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'importar-vehiculos-delphi.js'), xls, '--empresa', String(ids.company), ...a], { env: process.env, encoding: 'utf8' });
+  const count = async () => (await admin.call('GET', '/apps/vehiculos/records?size=1&q=9001')).body.total
+    + (await admin.call('GET', '/apps/vehiculos/records?size=1&q=9002')).body.total + (await admin.call('GET', '/apps/vehiculos/records?size=1&q=4482&state=')).body.total;
+  // simulación: no guarda nada
+  const sim = runIt();
+  assert.equal(sim.status, 0, sim.stderr);
+  assert.match(sim.stdout, /se cargan: 3/);
+  assert.match(sim.stdout, /a crear 2/);
+  assert.equal(await count(), 0);
+  // sin --crear-centros no ejecuta
+  assert.notEqual(runIt('--ejecutar').status, 0);
+  // ejecución
+  const ex = runIt('--ejecutar', '--crear-centros');
+  assert.equal(ex.status, 0, ex.stderr + ex.stdout);
+  assert.equal(await count(), 3);
+  const v1 = (await admin.call('GET', '/apps/vehiculos/records?q=9001%20AAA&state=')).body.rows[0];
+  assert.equal(v1.data.matricula, '9001 AAA');
+  assert.equal(v1.data.estado, 'Activo', 'de la repetida se carga la que está en activo');
+  assert.equal(v1.data.tipo, 'Furgoneta'); assert.equal(v1.data.titular, 'Asociación'); assert.equal(v1.data.ubicacion, 'Granada');
+  assert.equal(v1.data.seguro_compania, 'Mapfre'); assert.equal(v1.data.seguro_importe, 263.06); assert.equal(v1.data.itv_proxima, '2027-01-15');
+  assert.equal(v1.data.tarjeta_ambito, 'Servicio particular');
+  assert.equal(v1.center_name, 'Santander');
+  const v2 = (await admin.call('GET', '/apps/vehiculos/records?q=9002&state=')).body.rows[0];
+  assert.equal(v2.data.fecha_matriculacion, '', 'fecha imposible: vacía');
+  assert.equal(v2.center_name, 'Cádiz'); assert.equal(v2.data.titular, 'Cooperativa');
+  const v3 = (await admin.call('GET', '/apps/vehiculos/records?q=4482&state=')).body.rows[0];
+  assert.equal(v3.data.estado, 'Baja'); assert.equal(v3.data.motivo_baja, 'Definitiva');
+  const centers = (await admin.call('GET', '/admin/centers')).body;
+  assert.equal(centers.find((c) => c.code === 'CADI').kind, 'coste');
+  // el informe recoge repetida y fecha imposible
+  const informe = fs.readdirSync(dir).find((f) => f.startsWith('informe-vehiculos'));
+  const csv = fs.readFileSync(path.join(dir, informe), 'utf8');
+  assert.match(csv, /matrícula repetida/); assert.match(csv, /fecha imposible/);
+  // repetir no duplica
+  const again = runIt('--ejecutar', '--crear-centros');
+  assert.equal(again.status, 0);
+  assert.match(again.stdout, /se cargan: 0/);
+  assert.equal(await count(), 3);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
