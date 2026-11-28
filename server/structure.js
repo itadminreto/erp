@@ -7,7 +7,7 @@ const { FIELD_TYPES } = require('./fields');
 
 const FORMAT = 'erp-app-structure';
 const KEY_RE = /^[a-z][a-z0-9_]{0,40}$/;
-const APP_PROPS = ['title_field', 'calendar', 'status_field', 'closed_values', 'owner_field', 'number_start', 'voice_fields', 'transfers', 'center_kind'];
+const APP_PROPS = ['title_field', 'calendar', 'status_field', 'closed_values', 'owner_field', 'number_start', 'voice_fields', 'transfers', 'center_kind', 'state_filter'];
 const FIELD_PROPS = ['label', 'type', 'options', 'required', 'unique_value', 'show_in_list', 'width', 'max_length', 'height', 'help'];
 const parse = (s, def) => { try { return s ? JSON.parse(s) : def; } catch { return def; } };
 
@@ -84,6 +84,9 @@ async function importStructure(tpl, { forceLayout = false } = {}) {
         const used = (await all(`SELECT DISTINCT JSON_VALUE(data, '$.${ex.key}') v FROM records WHERE app_id = ? AND JSON_VALUE(data, '$.${ex.key}') <> ''`, app.id)).map((r) => r.v);
         exOpts.choices = [...new Set([...(opts.choices || []), ...used])];
         type = f.type; changed = true;
+      } else if (ex.type === 'text' && ['lookup', 'center'].includes(f.type)) {
+        // texto → lista maestra o centro: los valores ya escritos se respetan (las listas maestras admiten los antiguos)
+        Object.assign(exOpts, opts); type = f.type; changed = true;
       } else if (['select', 'multiselect'].includes(ex.type) && Array.isArray(opts.choices)) {
         const merged = [...new Set([...(exOpts.choices || []), ...opts.choices])];
         if (merged.length !== (exOpts.choices || []).length) { exOpts.choices = merged; changed = true; }
@@ -96,7 +99,7 @@ async function importStructure(tpl, { forceLayout = false } = {}) {
     const props = {};
     for (const k of APP_PROPS) {
       if (t[k] === undefined || t[k] === null) continue;
-      props[k] = ['closed_values', 'voice_fields'].includes(k) ? JSON.stringify(t[k]) : ['calendar', 'transfers'].includes(k) ? (t[k] ? 1 : 0) : t[k];
+      props[k] = ['closed_values', 'voice_fields'].includes(k) ? JSON.stringify(t[k]) : ['calendar', 'transfers', 'state_filter'].includes(k) ? (t[k] ? 1 : 0) : t[k];
     }
     // el diseño (secciones) se aplica si la app no tiene uno propio con secciones, o si se pide
     const lay = parse(app.form_layout, {});

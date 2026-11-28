@@ -117,7 +117,7 @@ router.get('/entity-fields/:entity', wrap(async (req, res) => res.json(await ent
 router.post('/entity-fields/:entity', wrap(async (req, res) => {
   const entity = checkEntity(req.params.entity);
   const d = fieldData(req.body || {}, true);
-  if (d.type === 'password' || d.type === 'group') throw httpError(400, 'Este tipo de campo solo puede usarse en las aplicaciones');
+  if (['password', 'group', 'lookup', 'center', 'file'].includes(d.type)) throw httpError(400, 'Este tipo de campo solo puede usarse en las aplicaciones');
   let key = String(req.body.key || slug(d.label)).trim().toLowerCase();
   if (!KEY_RE.test(key)) throw httpError(400, 'Clave de campo no válida');
   if (RESERVED.includes(key)) key = `${key}_2`;
@@ -141,7 +141,7 @@ router.put('/entity-fields/:entity/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM entity_fields WHERE id = ? AND entity = ?', Number(req.params.id), entity);
   if (!before) throw httpError(404, 'Campo no encontrado');
   const d = fieldData(req.body || {}, false);
-  if (d.type === 'password' || d.type === 'group') throw httpError(400, 'Este tipo de campo solo puede usarse en las aplicaciones');
+  if (['password', 'group', 'lookup', 'center', 'file'].includes(d.type)) throw httpError(400, 'Este tipo de campo solo puede usarse en las aplicaciones');
   const keys = Object.keys(d);
   if (keys.length) await run(`UPDATE entity_fields SET ${keys.map((k) => q(k) + ' = ?').join(',')} WHERE id = ?`, ...keys.map((k) => d[k]), before.id);
   const changes = diff(pick(before, keys), d);
@@ -386,8 +386,9 @@ router.post('/apps', wrap(async (req, res) => {
 router.put('/apps/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM apps WHERE id = ?', Number(req.params.id));
   if (!before) throw httpError(404, 'No encontrada');
-  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar', 'number_start', 'status_field', 'closed_values', 'owner_field', 'voice_fields', 'transfers', 'center_kind']);
+  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar', 'number_start', 'status_field', 'closed_values', 'owner_field', 'voice_fields', 'transfers', 'center_kind', 'state_filter']);
   if ('transfers' in d) d.transfers = bool(d.transfers);
+  if ('state_filter' in d) d.state_filter = bool(d.state_filter);
   if ('center_kind' in d && !['', 'coste', 'trabajo'].includes(d.center_kind)) throw httpError(400, 'Tipo de centro no válido');
   const appF = Object.fromEntries((await appFields(before.id)).map((f) => [f.key, f]));
   if ('status_field' in d) { d.status_field = d.status_field || null; if (d.status_field && !(appF[d.status_field] && appF[d.status_field].type === 'select')) throw httpError(400, 'El campo de estado debe ser una lista desplegable de la aplicación'); }
@@ -428,6 +429,100 @@ router.post('/structure', wrap(async (req, res) => {
   const summary = await tx(() => structure.importStructure(tpl, { force_layout, forceLayout: !!force_layout }));
   await audit(req, { entity: 'apps', action: 'import', summary: `Estructura importada: ${tpl.app.name} (${summary.apps_created.length} apps creadas, ${summary.fields_added} campos añadidos)` });
   res.json({ ok: true, ...summary });
+}));
+
+// ---------- listas maestras (marcas y modelos…) ----------
+const catalog = require('../catalog');
+const checkList = (l) => { if (!catalog.LISTS[l]) throw httpError(404, 'Lista no encontrada'); return l; };
+router.get('/catalog', wrap(async (req, res) => res.json(Object.entries(catalog.LISTS).map(([key, d]) => ({ key, ...d })))));
+router.get('/catalog/:list', wrap(async (req, res) => res.json((await catalog.listValues(checkList(req.params.list))).items)));
+router.get('/catalog/:list/unknown', wrap(async (req, res) => res.json(await catalog.unknownValues(checkList(req.params.list)))));
+router.post('/catalog/:list', wrap(async (req, res) => {
+  const list = checkList(req.params.list);
+  const value = String((req.body || {}).value || '').trim().slice(0, 150);
+  const parent = catalog.LISTS[list].parent ? String((req.body || {}).parent || '').trim() : '';
+  if (!value) throw httpError(400, 'Escribe el valor');
+  if (catalog.LISTS[list].parent && !(await get('SELECT id FROM catalog WHERE list_key = ? AND value = ?', catalog.LISTS[list].parent, parent))) throw httpError(400, 'Elige primero a qué pertenece');
+  if (await get('SELECT id FROM catalog WHERE list_key = ? AND parent = ? AND value = ?', list, parent, value)) throw httpError(409, 'Ya está en la lista');
+  await catalog.addValues(list, [[value, parent]]);
+  await audit(req, { entity: 'catalog', action: 'create', summary: `${catalog.LISTS[list].label}: añadido «${value}»${parent ? ` (${parent})` : ''}` });
+  res.status(201).json({ ok: true });
+}));
+/** Renombrar: también en los registros que lo usan y, si es una marca, en sus modelos. */
+router.put('/catalog/item/:id', wrap(async (req, res) => {
+  const it = await get('SELECT * FROM catalog WHERE id = ?', Number(req.params.id));
+  if (!it) throw httpError(404, 'No encontrado');
+  const value = String((req.body || {}).value || '').trim().slice(0, 150);
+  if (!value) throw httpError(400, 'Escribe el valor');
+  const dup = await get('SELECT id FROM catalog WHERE list_key = ? AND parent = ? AND value = ? AND id <> ?', it.list_key, it.parent, value, it.id);
+  if (dup && value.toLowerCase() !== it.value.toLowerCase()) throw httpError(409, 'Ya existe: usa «Unificar»');
+  const n = await tx(async () => {
+    await run('UPDATE catalog SET value = ? WHERE id = ?', value, it.id);
+    for (const c of catalog.childOf(it.list_key)) await run('UPDATE catalog SET parent = ? WHERE list_key = ? AND parent = ?', value, c, it.value);
+    return catalog.replaceInRecords(it.list_key, it.value, value, catalog.LISTS[it.list_key].parent ? it.parent : null);
+  });
+  await audit(req, { entity: 'catalog', action: 'update', summary: `${catalog.LISTS[it.list_key].label}: «${it.value}» → «${value}» (${n} registros)` });
+  res.json({ ok: true, records: n });
+}));
+/** Unificar: los registros con `from` pasan a `to` (p. ej. VOLKSWAGUEN → Volkswagen); `from` deja de existir. */
+router.post('/catalog/:list/merge', wrap(async (req, res) => {
+  const list = checkList(req.params.list);
+  const { from = '', to = '', parent = '' } = req.body || {};
+  if (!from || !to) throw httpError(400, 'Indica qué valor unificar y con cuál');
+  const n = await tx(() => catalog.mergeValues(list, from, to, parent));
+  await audit(req, { entity: 'catalog', action: 'update', summary: `${catalog.LISTS[list].label}: unificado «${from}» con «${to}» (${n} registros)` });
+  res.json({ ok: true, records: n });
+}));
+/** Unifica varios a la vez (las sugerencias). */
+router.post('/catalog/:list/merge-many', wrap(async (req, res) => {
+  const list = checkList(req.params.list);
+  const items = Array.isArray((req.body || {}).items) ? req.body.items.slice(0, 2000) : [];
+  let n = 0;
+  await tx(async () => { for (const it of items) if (it && it.from && it.to) n += await catalog.mergeValues(list, String(it.from), String(it.to), String(it.parent || '')); });
+  await audit(req, { entity: 'catalog', action: 'update', summary: `${catalog.LISTS[list].label}: ${items.length} valores unificados (${n} registros)` });
+  res.json({ ok: true, records: n, merged: items.length });
+}));
+router.delete('/catalog/item/:id', wrap(async (req, res) => {
+  const it = await get('SELECT * FROM catalog WHERE id = ?', Number(req.params.id));
+  if (!it) throw httpError(404, 'No encontrado');
+  const { items } = await catalog.listValues(it.list_key);
+  const used = (items.find((x) => x.id === it.id) || {}).uses || 0;
+  if (used) throw httpError(409, `Lo usan ${used} registros: usa «Unificar» para pasarlos a otro valor`);
+  await run('DELETE FROM catalog WHERE id = ?', it.id);
+  for (const c of catalog.childOf(it.list_key)) await run('DELETE FROM catalog WHERE list_key = ? AND parent = ?', c, it.value);
+  await audit(req, { entity: 'catalog', action: 'delete', summary: `${catalog.LISTS[it.list_key].label}: eliminado «${it.value}»` });
+  res.json({ ok: true });
+}));
+/** Importar pares «Marca;Modelo» (CSV pegado o fichero). */
+router.post('/catalog/:list/import', wrap(async (req, res) => {
+  const list = checkList(req.params.list);
+  const child = catalog.childOf(list)[0];
+  const lines = String((req.body || {}).text || '').split(/\r?\n/).map((l) => l.split(/[;\t,]/).map((x) => x.trim())).filter((l) => l[0]);
+  if (!lines.length) throw httpError(400, 'No hay filas');
+  if (lines.length > 20000) throw httpError(400, 'Máximo 20.000 filas');
+  const parents = await catalog.addValues(list, lines.map((l) => [l[0], '']));
+  const children = child ? await catalog.addValues(child, lines.filter((l) => l[1]).map((l) => [l[1], l[0]])) : 0;
+  // con la escritura de la lista (si la marca ya estaba con otras mayúsculas, los modelos cuelgan de ella)
+  await audit(req, { entity: 'catalog', action: 'import', summary: `${catalog.LISTS[list].label}: importados ${parents} nuevos${child ? ` y ${children} ${catalog.LISTS[child].label.toLowerCase()}` : ''}` });
+  res.json({ ok: true, added: parents, added_children: children });
+}));
+/** Corrige mayúsculas/minúsculas en los registros (RENAULT → Renault) cuando el valor ya está en la lista. */
+router.post('/catalog/:list/fix-case', wrap(async (req, res) => {
+  const list = checkList(req.params.list);
+  const n = await tx(async () => {
+    let total = 0;
+    for (const it of await all('SELECT value, parent FROM catalog WHERE list_key = ?', list)) {
+      for (const f of await catalog.fieldsUsing(list)) {
+        const r = await run(`UPDATE records SET data = JSON_SET(data, '$.${f.key}', ?) WHERE app_id = ? AND LOWER(JSON_VALUE(data, '$.${f.key}')) = LOWER(?)
+          AND JSON_VALUE(data, '$.${f.key}') COLLATE utf8mb4_bin <> ? ${f.depends_on ? `AND LOWER(COALESCE(JSON_VALUE(data, '$.${f.depends_on}'), '')) = LOWER(?)` : ''}`,
+        it.value, f.app_id, it.value, it.value, ...(f.depends_on ? [it.parent] : []));
+        total += Number(r.changes || 0);
+      }
+    }
+    return total;
+  });
+  await audit(req, { entity: 'catalog', action: 'update', summary: `${catalog.LISTS[list].label}: corregidas mayúsculas en ${n} registros` });
+  res.json({ ok: true, records: n });
 }));
 
 // ---------- informes de cada app ----------
@@ -559,7 +654,7 @@ router.put('/apps-order', wrap(async (req, res) => {
 
 const WIDTHS = ['xs', 'sm', 'md', 'lg', 'xl', 'full'];
 const TALL_TYPES = ['textarea', 'multiselect', 'image']; // tipos que admiten altura (más líneas / opciones visibles)
-function fieldData(b, isNew) {
+function fieldData(b, isNew, prevOptions = {}) {
   const d = pick(b, ['label', 'type', 'required', 'unique_value', 'show_in_list', 'width', 'help', 'active', 'max_length', 'height']);
   if ((isNew || 'label' in d) && !String(d.label || '').trim()) throw httpError(400, 'La etiqueta es obligatoria');
   if ('type' in d && !FIELD_TYPES[d.type]) throw httpError(400, 'Tipo de campo no válido');
@@ -572,9 +667,16 @@ function fieldData(b, isNew) {
     else if (!Number.isInteger(n) || n < 1 || n > 65000) throw httpError(400, 'Máximo de caracteres: número entre 1 y 65000');
     else d.max_length = n;
   }
-  if ('choices' in b || 'multiple' in b || 'due_alert' in b) {
-    const choices = (Array.isArray(b.choices) ? b.choices : String(b.choices || '').split('\n')).map((s) => String(s).trim()).filter(Boolean);
-    d.options = JSON.stringify({ choices, ...('multiple' in b ? { multiple: bool(b.multiple) === 1 } : {}), ...('due_alert' in b ? { due_alert: bool(b.due_alert) === 1 } : {}) });
+  if (['choices', 'multiple', 'due_alert', 'list', 'depends_on', 'kind'].some((k) => k in b)) {
+    // se conservan las opciones que no vienen (colores, lista maestra…)
+    const o = { ...(prevOptions || {}) };
+    if ('choices' in b) o.choices = (Array.isArray(b.choices) ? b.choices : String(b.choices || '').split('\n')).map((s) => String(s).trim()).filter(Boolean);
+    if ('multiple' in b) o.multiple = bool(b.multiple) === 1;
+    if ('due_alert' in b) o.due_alert = bool(b.due_alert) === 1;
+    if ('list' in b) { if (b.list && !require('../catalog').LISTS[b.list]) throw httpError(400, 'Lista maestra no válida'); o.list = b.list || undefined; }
+    if ('depends_on' in b) o.depends_on = KEY_RE.test(String(b.depends_on || '')) ? b.depends_on : undefined;
+    if ('kind' in b) o.kind = ['trabajo', 'coste'].includes(b.kind) ? b.kind : undefined;
+    d.options = JSON.stringify(o);
   }
   return d;
 }
@@ -599,7 +701,7 @@ router.post('/apps/:id/fields', wrap(async (req, res) => {
 router.put('/fields/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM fields WHERE id = ?', Number(req.params.id));
   if (!before) throw httpError(404, 'Campo no encontrado');
-  const d = fieldData(req.body || {}, false);
+  const d = fieldData(req.body || {}, false, parseField(before).options);
   if ('type' in d && d.type !== before.type && (d.type === 'password' || before.type === 'password')) {
     throw httpError(400, 'No se puede convertir un campo a/desde contraseña (crea un campo nuevo)');
   }

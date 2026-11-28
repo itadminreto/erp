@@ -111,6 +111,7 @@ function serialize(req, r, full = true) {
     if (f.type === 'password') out[f.key] = v ? MASK : '';
     else if (f.type === 'signature') out[f.key] = v && v.img ? (full ? v : { signed: true, at: v.at }) : '';
     else if (f.type === 'image') out[f.key] = Array.isArray(v) ? (full ? v : { count: v.length }) : [];
+    else if (f.type === 'file') out[f.key] = Array.isArray(v) ? (full ? v : { count: v.length }) : [];
     else out[f.key] = v ?? '';
   }
   const g = req.grants, u = req.user;
@@ -164,6 +165,24 @@ function buildData(req, input, existing, ctx) {
       data[f.key] = out;
       continue;
     }
+    if (f.type === 'file') {
+      // documentos (PDF, imágenes, Office): { id } ya guardados o { data, name } nuevos
+      const prev = Array.isArray(existing && existing[f.key]) ? existing[f.key] : [];
+      const items = Array.isArray(v) ? v : [];
+      if (items.length > 30) { errors.push(`${f.label}: máximo 30 documentos`); continue; }
+      const out = [];
+      for (const it of items) {
+        if (it && it.id) { const old = prev.find((x) => x.id === Number(it.id)); if (old) out.push(old); continue; }
+        const m = it && typeof it.data === 'string' && it.data.match(/^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+/=]+)$/i);
+        const mime = m ? m[1].toLowerCase() : '';
+        if (!m || !DOC_TYPES[mime]) { errors.push(`${f.label}: «${(it && it.name) || 'archivo'}» no es un tipo admitido (PDF, imagen, Word, Excel, OpenOffice o texto)`); continue; }
+        const size = Math.floor(m[2].length * 3 / 4);
+        if (size > 15 * 1024 * 1024) { errors.push(`${f.label}: «${it.name}» es demasiado grande (máx. 15 MB)`); continue; }
+        out.push({ pending: true, mime, b64: m[2], size, name: String(it.name || `documento.${DOC_TYPES[mime]}`).replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 200) });
+      }
+      data[f.key] = out;
+      continue;
+    }
     if (f.type === 'signature') {
       const img = v && typeof v === 'object' ? v.img : v;
       if (img && existing && existing[f.key] && existing[f.key].img === img) continue; // misma firma
@@ -213,6 +232,13 @@ function fail(res, e) {
 }
 const pwKeysOf = (req) => req.fields.filter((f) => f.type === 'password').map((f) => f.key);
 /** Vista de los datos para la auditoría: las firmas se registran como «Firmado (fecha)», no la imagen. */
+/** Tipos de documento admitidos y su extensión. */
+const DOC_TYPES = {
+  'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'text/plain': 'txt', 'text/csv': 'csv',
+  'application/msword': 'doc', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.oasis.opendocument.text': 'odt', 'application/vnd.oasis.opendocument.spreadsheet': 'ods',
+};
 const auditView = (req, data) => {
   const out = { ...data };
   for (const f of req.fields) {
@@ -220,6 +246,10 @@ const auditView = (req, data) => {
     if (f.type === 'image') {
       const l = Array.isArray(data[f.key]) ? data[f.key] : [];
       out[f.key] = l.length ? `${l.length} imagen${l.length > 1 ? 'es' : ''} (${l.map((x) => (x.pending ? 'nueva' : x.id)).join(', ')})` : '';
+    }
+    if (f.type === 'file') {
+      const l = Array.isArray(data[f.key]) ? data[f.key] : [];
+      out[f.key] = l.map((x) => x.name).join(', ');
     }
   }
   return out;
@@ -242,7 +272,7 @@ router.get('/', wrap(async (req, res) => {
     const closed = closedValues(a);
     const openSql = a.status_field && closed.length && fields.some((x) => x.key === a.status_field)
       ? ` AND COALESCE(${jv(a.status_field)}, '') NOT IN (${closed.map(() => '?').join(',')})` : '';
-    if (openSql) stats.open = (await get(`SELECT COUNT(*) n ${base}${openSql}`, ...bp, ...closed)).n;
+    if (openSql && a.state_filter !== 0) stats.open = (await get(`SELECT COUNT(*) n ${base}${openSql}`, ...bp, ...closed)).n;
     const dueF = fields.filter((x) => x.type === 'date' && x.options.due_alert);
     if (dueF.length) {
       stats.overdue = (await get(`SELECT COUNT(*) n ${base}${openSql} AND (${dueF.map((x) => `${jv(x.key)} < CURDATE()`).join(' OR ')})`, ...bp, ...(openSql ? closed : []))).n;
@@ -305,6 +335,13 @@ router.get('/:appKey', wrap(async (req, res) => {
     app: req.appDef, fields: req.fields, perms: summary(req.grants),
     // subapartados (Revisiones, Siniestros… dentro de Vehículos) y app padre
     children: await all('SELECT id, `key`, name, icon, color, title_field FROM apps WHERE parent_app_id = ? AND active = 1 ORDER BY sort, name', req.appDef.id),
+    company_centers: await companyCenters(req.companyId),
+    lookups: await (async () => {
+      const lists = [...new Set(req.fields.filter((f) => f.type === 'lookup' && f.options.list).map((f) => f.options.list))];
+      if (!lists.length) return {};
+      const rows = await all(`SELECT list_key, value, parent FROM catalog WHERE active = 1 AND list_key IN (${lists.map(() => '?').join(',')}) ORDER BY value`, ...lists);
+      return Object.fromEntries(lists.map((l) => [l, rows.filter((x) => x.list_key === l).map((x) => ({ value: x.value, parent: x.parent }))]));
+    })(),
     siblings: req.parentApp ? await all('SELECT id, `key`, name, icon FROM apps WHERE parent_app_id = ? AND active = 1 ORDER BY sort, name', req.parentApp.id) : [],
     parent_app: req.parentApp ? { id: req.parentApp.id, key: req.parentApp.key, name: req.parentApp.name, icon: req.parentApp.icon, title_field: req.parentApp.title_field } : null,
     can_create_without_center: can(req.grants, 'create', req.user, { center_id: null }),
@@ -409,7 +446,7 @@ async function listQuery(req, q) {
     if (!f || f.type === 'password') continue;
     if (f.type === 'checkbox') {
       where.push(`${jv(key)} = ?`); params.push(v === '1' || v === 'true' ? 'true' : 'false');
-    } else if (['select', 'user', 'group'].includes(f.type)) {
+    } else if (['select', 'user', 'group', 'center', 'lookup'].includes(f.type)) {
       where.push(`${jv(key)} = ?`); params.push(String(v));
     } else {
       where.push(`${jv(key)} LIKE ?`); params.push(`%${v}%`);
@@ -447,7 +484,7 @@ router.get('/:appKey/records/:id', wrap(async (req, res) => res.json(serialize(r
  * las referencias { id, name, w, h, at }. Devuelve los datos finales.
  */
 async function storeImages(req, recId, data) {
-  const imgFields = req.fields.filter((f) => f.type === 'image');
+  const imgFields = req.fields.filter((f) => f.type === 'image' || f.type === 'file');
   if (!imgFields.length) return data;
   let changed = false;
   for (const f of imgFields) {
@@ -457,7 +494,7 @@ async function storeImages(req, recId, data) {
       if (!it.pending) { out.push(it); continue; }
       const id = Number((await run(`INSERT INTO record_files (record_id, field_key, name, mime, size, width, height, data, created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
         recId, f.key, it.name, it.mime, it.size, it.w, it.h, it.b64, req.user.id)).lastInsertRowid);
-      out.push({ id, name: it.name, mime: it.mime, w: it.w, h: it.h, at: new Date().toISOString() });
+      out.push({ id, name: it.name, mime: it.mime, ...(f.type === 'file' ? { size: it.size } : { w: it.w, h: it.h }), at: new Date().toISOString() });
       changed = true;
     }
     data[f.key] = out;
@@ -502,6 +539,24 @@ async function findParent(req, ref) {
   if (!can(req.grants, 'view', req.user, p)) throw new Error(`sin permiso sobre ${req.parentApp.name} «${v}»`);
   return { ...p, title: v };
 }
+/**
+ * Campos «Lista maestra» (marcas, modelos…): el valor tiene que estar en la lista (y en la de su campo padre, p. ej.
+ * el modelo dentro de la marca). Los valores antiguos que no estén se respetan mientras no se cambien.
+ */
+async function checkLookups(req, data, existing = {}) {
+  const errs = [];
+  for (const f of req.fields.filter((x) => x.type === 'lookup' && x.options.list)) {
+    const v = data[f.key];
+    if (v === '' || v === null || v === undefined) continue;
+    const dep = f.options.depends_on;
+    const parent = dep ? String(data[dep] ?? '') : '';
+    if (existing && existing[f.key] === v && (!dep || existing[dep] === data[dep])) continue;
+    const row = await get('SELECT value FROM catalog WHERE list_key = ? AND parent = ? AND value = ? AND active = 1', f.options.list, parent, String(v));
+    if (!row) errs.push(`${f.label}: «${v}» no está en la lista${dep ? ` de ${parent || '(sin ' + dep + ')'}` : ''} (el administrador puede añadirlo en Listas maestras)`);
+    else data[f.key] = row.value; // con las mayúsculas de la lista
+  }
+  if (errs.length) throw httpError(400, errs.join(' · '));
+}
 /** Registro padre de un subapartado (debe existir, ser de la empresa y poder verse). */
 async function parentRecord(req, id) {
   const p = await get('SELECT * FROM records WHERE id = ? AND app_id = ? AND company_id = ? AND deleted_at IS NULL', Number(id) || 0, req.parentApp.id, req.companyId);
@@ -520,7 +575,8 @@ router.post('/:appKey/records', wrap(async (req, res) => {
     if (!can(req.grants, 'create', req.user, { center_id: centerId, created_by: p.created_by })) throw httpError(403, 'Sin permiso para añadir en ese centro');
   } else await checkCenter(req, centerId, 'create');
   const groups = await companyGroups(req.companyId);
-  const data = buildData(req, body.data || {}, {}, { users: await activeUsers(), groups, centerId });
+  const data = buildData(req, body.data || {}, {}, { users: await activeUsers(), groups, centerId, centers: await companyCenters(req.companyId) });
+  await checkLookups(req, data, {});
   checkGroups(req, data, centerId, groups);
   const id = await tx(async () => {
     await checkUnique(req, data);
@@ -544,7 +600,8 @@ router.put('/:appKey/records/:id', wrap(async (req, res) => {
     }
   }
   const groups = await companyGroups(req.companyId);
-  const data = buildData(req, body.data || {}, JSON.parse(rec.data), { users: await activeUsers(), groups, centerId });
+  const data = buildData(req, body.data || {}, JSON.parse(rec.data), { users: await activeUsers(), groups, centerId, centers: await companyCenters(req.companyId) });
+  await checkLookups(req, data, JSON.parse(rec.data));
   checkGroups(req, data, centerId, groups);
   await tx(async () => {
     await checkUnique(req, data, rec.id);
@@ -649,9 +706,13 @@ router.post('/:appKey/bulk', wrap(async (req, res) => {
 // ---------- imágenes ----------
 router.get('/:appKey/records/:id/files/:fid', wrap(async (req, res) => {
   const rec = await getRecord(req, req.params.id); // comprueba permisos sobre el registro
-  const f = await get('SELECT mime, data FROM record_files WHERE id = ? AND record_id = ?', Number(req.params.fid), rec.id);
-  if (!f) throw httpError(404, 'Imagen no encontrada');
+  const f = await get('SELECT name, mime, data FROM record_files WHERE id = ? AND record_id = ?', Number(req.params.fid), rec.id);
+  if (!f) throw httpError(404, 'Archivo no encontrado');
   res.setHeader('Content-Type', f.mime);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // PDF e imágenes se abren en el navegador; el resto se descarga
+  const inline = /^(application\/pdf|image\/)/.test(f.mime) && req.query.download !== '1';
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name || 'archivo')}`);
   res.setHeader('Cache-Control', 'private, max-age=86400'); // el id de una imagen no cambia de contenido
   res.send(Buffer.from(f.data, 'base64'));
 }));
@@ -663,7 +724,8 @@ async function renderTemplate(req, rec, tpl) {
   const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
   const vars = { numero: rec.number, app: req.appDef.name, centro: rec.center_name || '', fecha: String(rec.created_at).slice(0, 10), usuario: req.user.name };
   const groups = await groupsMap(req.companyId);
-  for (const f of req.fields) if (f.type !== 'password') vars[f.key] = toText(f, data[f.key], users, groups);
+  const centers = Object.fromEntries((await companyCenters(req.companyId)).map((c) => [c.id, c]));
+  for (const f of req.fields) if (f.type !== 'password') vars[f.key] = toText(f, data[f.key], users, groups, centers);
   return String(tpl || '').replace(/\{([a-z0-9_]+)\}/g, (m, k) => (k in vars ? String(vars[k] ?? '') : m));
 }
 router.post('/:appKey/records/:id/action/:bid', wrap(async (req, res) => {
@@ -786,13 +848,14 @@ router.get('/:appKey/export', wrap(async (req, res) => {
   const rows = await exportRows(req);
   const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
   const groups = await groupsMap(req.companyId);
+  const centersById = Object.fromEntries((await companyCenters(req.companyId)).map((c) => [c.id, c]));
   const fields = req.fields.filter((f) => f.type !== 'password' || withPw);
   const header = ['Nº', ...(req.parentApp ? [req.parentApp.name] : []), 'Centro', ...fields.map((f) => f.label), 'Creado', 'Modificado', 'Estado'];
   const matrix = rows.map((r) => {
     const d = JSON.parse(r.data);
     const rowCanPw = withPw && can(req.grants, 'view_passwords', req.user, r);
     return [r.number, ...(req.parentApp ? [parentTitle(req, r) || (r.parent_number ? `Nº ${r.parent_number}` : '')] : []), r.center_code || r.center_name || '',
-      ...fields.map((f) => (f.type === 'password' ? (rowCanPw ? decrypt(d[f.key]) : '') : toText(f, d[f.key], users, groups))),
+      ...fields.map((f) => (f.type === 'password' ? (rowCanPw ? decrypt(d[f.key]) : '') : toText(f, d[f.key], users, groups, centersById))),
       r.created_at, r.updated_at, r.deleted_at ? 'BORRADO' : 'Activo'];
   });
   await audit(req, { entity: 'app', entityId: req.appDef.id, action: 'export', appId: req.appDef.id, companyId: req.companyId,
@@ -868,6 +931,7 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
   const centers = await visibleCenters(req);
   const users = await activeUsers();
   const groups = await companyGroups(req.companyId);
+  const allCenters = await companyCenters(req.companyId);
   const findCenter = (v) => {
     const s = norm(v);
     if (!s) return undefined;
@@ -906,7 +970,8 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
             if (!can(req.grants, 'edit', req.user, existing)) throw new Error('sin permiso para modificar este registro');
             const newCenter = centerId === undefined ? existing.center_id : centerId;
             if (newCenter !== existing.center_id) await checkCenter(req, newCenter, 'edit');
-            const data = buildData(req, input, JSON.parse(existing.data), { users, groups, centerId: newCenter });
+            const data = buildData(req, input, JSON.parse(existing.data), { users, groups, centerId: newCenter, centers: allCenters });
+            await checkLookups(req, data, JSON.parse(existing.data));
             checkGroups(req, data, newCenter, groups);
             await checkUnique(req, data, existing.id);
             if (await updateRecord(req, existing, newCenter, data, 'Modificación por importación')) result.updated++;
@@ -915,14 +980,16 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
             // subapartado: se cuelga del registro padre (por Nº o por su campo título, p. ej. la matrícula)
             const p = await findParent(req, parentRef);
             if (!can(req.grants, 'create', req.user, { center_id: p.center_id })) throw new Error('sin permiso en el centro de ' + (p.title || 'ese registro'));
-            const data = buildData(req, input, {}, { users, groups, centerId: p.center_id });
+            const data = buildData(req, input, {}, { users, groups, centerId: p.center_id, centers: allCenters });
+            await checkLookups(req, data, {});
             await checkUnique(req, data);
             await insertRecord(req, p.center_id, data, 'Alta por importación', p.id);
             result.created++;
           } else {
             const cId = centerId === undefined ? (default_center ? Number(default_center) : null) : centerId;
             await checkCenter(req, cId, 'create');
-            const data = buildData(req, input, {}, { users, groups, centerId: cId });
+            const data = buildData(req, input, {}, { users, groups, centerId: cId, centers: allCenters });
+            await checkLookups(req, data, {});
             checkGroups(req, data, cId, groups);
             await checkUnique(req, data);
             await insertRecord(req, cId, data, 'Alta por importación');

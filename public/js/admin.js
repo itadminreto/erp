@@ -425,6 +425,7 @@ export async function renderAppsAdmin(root, onChange) {
       ...(a.parent_app_id ? [] : [
         { key: 'center_kind', label: 'Centros que usa', type: 'select', value: a.center_kind || '', options: [{ value: '', label: 'Cualquier centro' }, { value: 'coste', label: 'Solo centros de coste (y «trabajo y coste»)' }, { value: 'trabajo', label: 'Solo centros de trabajo (y «trabajo y coste»)' }] },
         { key: 'transfers', label: 'Traspasos entre centros (los acepta el centro de destino)', type: 'checkbox', value: !!a.transfers }]),
+      { key: 'state_filter', label: 'Mostrar el filtro «Abiertos / Cerrados / Todos» en la lista', type: 'checkbox', value: a.state_filter !== 0 },
       { key: 'calendar', label: 'Vista calendario (necesita algún campo de fecha)', type: 'checkbox', value: !!a.calendar },
       { key: 'active', label: 'Aplicación activa', type: 'checkbox', value: !!a.active }]);
     if (!v) return;
@@ -456,7 +457,18 @@ export async function renderAppsAdmin(root, onChange) {
     const dueAlert = cb(f && f.options && f.options.due_alert);
     const dueLbl = h('label.check', dueAlert, 'Avisar de vencimiento (en rojo si ya pasó, en naranja si faltan 3 días o menos)');
     const multipleLbl = h('label.check', multiple, 'Permitir varias imágenes (hasta 20)');
+    // lista maestra (marcas, modelos…) y, si depende de otro campo, cuál; tipo de centro
+    const appFieldsNow = ((apps.find((x) => x.id === current) || {}).fields || []).filter((x) => x.type === 'lookup' && (!f || x.key !== f.key));
+    const listSel = h('select', h('option', { value: '' }, '— Elige la lista —'));
+    api('/admin/catalog').then((ls) => ls.forEach((l) => listSel.append(h('option', { value: l.key, selected: f && f.options && f.options.list === l.key }, l.label)))).catch(() => {});
+    const depSel = h('select', h('option', { value: '' }, '— No depende de otro campo —'), appFieldsNow.map((x) => h('option', { value: x.key, selected: f && f.options && f.options.depends_on === x.key }, x.label)));
+    const lookupBox = h('div.stack', { style: { gap: '8px' } }, h('div.field', h('label', 'Lista maestra'), listSel, h('div.help', 'Se mantiene en Super admin → Listas maestras.')),
+      h('div.field', h('label', 'Depende de'), depSel, h('div.help', 'P. ej. el modelo depende de la marca: solo se ofrecen los modelos de la marca elegida.')));
+    const kindSel = h('select', [['', 'Cualquier centro'], ['trabajo', 'Centros de trabajo'], ['coste', 'Centros de coste']].map(([v, l]) => h('option', { value: v, selected: ((f && f.options && f.options.kind) || '') === v }, l)));
+    const kindBox = h('div.field', h('label', 'Centros que se pueden elegir'), kindSel);
     const sync = () => {
+      lookupBox.hidden = type.value !== 'lookup';
+      kindBox.hidden = type.value !== 'center';
       choicesField.hidden = !['select', 'multiselect'].includes(type.value);
       multipleLbl.hidden = type.value !== 'image';
       dueLbl.hidden = type.value !== 'date';
@@ -466,10 +478,12 @@ export async function renderAppsAdmin(root, onChange) {
     const m = modal({
       title: f ? `Campo · ${f.label}` : `Nuevo campo en ${target.name}`, size: 'sm',
       content: h('div.stack', h('div.field', h('label', 'Etiqueta *'), label), h('div.field', h('label', 'Clave interna'), key),
-        h('div.field', h('label', 'Tipo'), type), choicesField, h('div.field', h('label', 'Ancho en el formulario'), width, h('div.help', 'Proporción de la fila en pantallas anchas; en el móvil se ajusta solo.')), maxLenField, h('div.field', h('label', 'Texto de ayuda'), help),
+        h('div.field', h('label', 'Tipo'), type), choicesField, lookupBox, kindBox, h('div.field', h('label', 'Ancho en el formulario'), width, h('div.help', 'Proporción de la fila en pantallas anchas; en el móvil se ajusta solo.')), maxLenField, h('div.field', h('label', 'Texto de ayuda'), help),
         h('div.stack', { style: { gap: '8px' } }, h('label.check', required, 'Obligatorio'), h('label.check', unique, 'Valor único (no se permiten duplicados)'), h('label.check', inList, 'Mostrar en el listado por defecto'), multipleLbl, dueLbl, f ? h('label.check', active, 'Activo') : null)),
       footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
-        const body = { label: label.value, type: type.value, width: widthVal, max_length: maxLenField.hidden ? '' : maxLen.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value, ...(type.value === 'image' ? { multiple: multiple.checked } : {}), ...(type.value === 'date' ? { due_alert: dueAlert.checked } : {}) };
+        const body = { label: label.value, type: type.value, width: widthVal, max_length: maxLenField.hidden ? '' : maxLen.value, help: help.value, required: required.checked, unique_value: unique.checked, show_in_list: inList.checked, choices: choices.value, ...(type.value === 'image' ? { multiple: multiple.checked } : {}), ...(type.value === 'date' ? { due_alert: dueAlert.checked } : {}),
+          ...(type.value === 'lookup' ? { list: listSel.value, depends_on: depSel.value } : {}), ...(type.value === 'center' ? { kind: kindSel.value } : {}) };
+        if (type.value === 'lookup' && !listSel.value) return toast('Elige la lista maestra', 'error');
         if (f) body.active = active.checked; else if (key.value) body.key = key.value;
         try { if (f) await target.update(f, body); else await target.create(body); toast('Campo guardado', 'ok'); m.close(); reload(); } catch (e) { toastErr(e); }
       } }, 'Guardar')],
@@ -958,4 +972,118 @@ export async function renderFormDesigner(root, appId) {
       h('div.spacer'), status, viewSeg),
     h('div.dz-stage', h('div.card.dz-paper', h('div.dz-paper-head', h('span', app.icon), h('strong', `Nuevo · ${app.name}`)), canvas)));
   applySizes();
+}
+
+// ---------- listas maestras (marcas y modelos de vehículo…) ----------
+export async function renderCatalog(root) {
+  const lists = await api('/admin/catalog');
+  const parentList = lists.find((l) => !l.parent) || lists[0];
+  const childList = lists.find((l) => l.parent === parentList.key);
+  let parents = [], children = [], unknownP = [], unknownC = [], current = null, filter = '';
+  const leftBox = h('div'), rightBox = h('div'), unkBox = h('div');
+  const search = h('input', { type: 'search', placeholder: `Buscar ${parentList.singular}…`, 'aria-label': `Buscar ${parentList.singular}`, oninput: debounce(() => { filter = search.value.toLowerCase(); drawLeft(); }, 150) });
+  clear(root, head('📚 Listas maestras', `${parentList.label}${childList ? ' y ' + childList.label.toLowerCase() : ''}: lo que se puede elegir en los formularios. Renombrar o unificar actualiza también los registros.`,
+    h('button.btn', { onclick: importCsv }, '⬆ Importar CSV'),
+    h('button.btn', { title: 'Pone en los registros la escritura de la lista (RENAULT → Renault)', onclick: fixCase }, 'Aa Corregir mayúsculas')),
+  unkBox,
+  h('div.catalog-grid', h('section.card.card-pad', h('div.row', h('h2', { style: { flex: 1 } }, parentList.label), h('button.btn.primary.sm', { onclick: () => addValue(parentList.key, '') }, `＋ Nueva ${parentList.singular}`)), h('div.search', { style: { margin: '8px 0' } }, search), leftBox),
+    h('section.card.card-pad', rightBox)));
+
+  async function load() {
+    [parents, unknownP] = await Promise.all([api(`/admin/catalog/${parentList.key}`), api(`/admin/catalog/${parentList.key}/unknown`)]);
+    if (childList) [children, unknownC] = await Promise.all([api(`/admin/catalog/${childList.key}`), api(`/admin/catalog/${childList.key}/unknown`)]);
+    if (current && !parents.some((p) => p.value === current)) current = null;
+    drawUnknown(); drawLeft(); drawRight();
+  }
+  const mergeSel = (opts, onPick, label) => {
+    const sel = h('select', { 'aria-label': label, style: { width: 'auto', maxWidth: '220px' } }, h('option', { value: '' }, 'Unificar con…'), opts.map((o) => h('option', { value: o }, o)));
+    sel.addEventListener('change', () => { if (sel.value) onPick(sel.value); });
+    return sel;
+  };
+  function drawUnknown() {
+    if (!unknownP.length) return clear(unkBox);
+    clear(unkBox, h('section.card.card-pad', { style: { marginBottom: '14px' } },
+      h('h2', `⚠ ${parentList.label} escritas en los registros que no están en la lista (${unknownP.length})`),
+      h('p.muted.small', 'Vienen de datos antiguos o importados. Unifícalas con la correcta (se cambian en los registros) o añádelas a la lista.'),
+      unknownP.some((u) => u.suggest) ? h('div.row', { style: { marginBottom: '8px' } },
+        h('button.btn.primary.sm', { onclick: () => applySuggestions(parentList.key, unknownP.filter((u) => u.suggest)) }, `✔ Aplicar las ${unknownP.filter((u) => u.suggest).length} sugerencias`),
+        h('span.muted.small', 'Revisa la columna «Sugerencia»: lo que no quieras unificar, cámbialo a mano.')) : null,
+      h('div.table-wrap', { style: { maxHeight: '300px', overflowY: 'auto' } }, h('table.data', h('tbody', unknownP.slice(0, 300).map((u) => h('tr', { style: { cursor: 'default' } },
+        h('td', h('strong', u.value)), h('td.small.muted', `${u.n} registro${u.n === 1 ? '' : 's'}`),
+        h('td.small', u.suggest ? ['→ ', h('strong', u.suggest)] : h('span.muted', 'sin sugerencia')),
+        h('td.actions', h('div.btn-group', { style: { flexWrap: 'nowrap' } },
+          mergeSel(parents.map((p) => p.value), (to) => merge(parentList.key, u.value, to, ''), `Unificar ${u.value} con`),
+          h('button.btn.sm', { onclick: () => addValue(parentList.key, '', u.value) }, '＋ Añadir a la lista'))))))))));
+  }
+  function drawLeft() {
+    const list = parents.filter((p) => !filter || p.value.toLowerCase().includes(filter));
+    const nChildren = (v) => children.filter((c) => c.parent === v).length;
+    clear(leftBox, list.length ? h('div.catalog-list', list.map((p) => h('div.catalog-row', { class: p.value === current ? 'on' : '' },
+      h('button.catalog-pick', { type: 'button', onclick: () => { current = p.value; drawLeft(); drawRight(); } }, h('strong', p.value),
+        h('span.muted.small', ` ${childList ? nChildren(p.value) + ' ' + childList.singular + 's · ' : ''}${p.uses} en uso`)),
+      itemActions(parentList.key, p, parents.filter((x) => x.id !== p.id).map((x) => x.value), '')))) : h('p.muted', 'Sin resultados'));
+  }
+  function drawRight() {
+    if (!childList) return clear(rightBox);
+    if (!current) return clear(rightBox, h('h2', childList.label), h('p.muted', `Elige una ${parentList.singular} para ver y editar sus ${childList.singular}s.`));
+    const list = children.filter((c) => c.parent === current);
+    const unk = unknownC.filter((u) => u.parent.toLowerCase() === current.toLowerCase());
+    clear(rightBox, h('div.row', h('h2', { style: { flex: 1 } }, `${childList.label}: ${current}`), h('button.btn.primary.sm', { onclick: () => addValue(childList.key, current) }, `＋ Nuevo ${childList.singular}`)),
+      list.length ? h('div.catalog-list', { style: { marginTop: '8px' } }, list.map((c) => h('div.catalog-row', h('span.catalog-pick', h('strong', c.value), h('span.muted.small', ` ${c.uses} en uso`)),
+        itemActions(childList.key, c, list.filter((x) => x.id !== c.id).map((x) => x.value), current)))) : h('p.muted', `Todavía no hay ${childList.singular}s.`),
+      unk.length ? [h('h3', { style: { marginTop: '14px' } }, `⚠ Escritos en los registros y no en la lista (${unk.length})`),
+        unk.some((u) => u.suggest) ? h('button.btn.sm', { style: { margin: '6px 0' }, onclick: () => applySuggestions(childList.key, unk.filter((u) => u.suggest), current) }, `✔ Aplicar ${unk.filter((u) => u.suggest).length} sugerencias`) : null,
+        h('div.catalog-list', unk.map((u) => h('div.catalog-row', h('span.catalog-pick', h('strong', u.value), h('span.muted.small', ` ${u.n} en uso`)),
+          h('div.btn-group', { style: { flexWrap: 'nowrap' } }, mergeSel(list.map((x) => x.value), (to) => merge(childList.key, u.value, to, current), `Unificar ${u.value} con`),
+            h('button.btn.sm', { onclick: () => addValue(childList.key, current, u.value) }, '＋ Añadir')))))] : null);
+  }
+  function itemActions(listKey, it, others, parent) {
+    return h('div.btn-group', { style: { flexWrap: 'nowrap' } },
+      h('button.btn.sm.ghost', { title: 'Renombrar', 'aria-label': `Renombrar ${it.value}`, onclick: () => rename(it) }, '✎'),
+      others.length ? mergeSel(others, (to) => merge(listKey, it.value, to, parent), `Unificar ${it.value} con`) : null,
+      h('button.btn.sm.ghost', { title: 'Eliminar', 'aria-label': `Eliminar ${it.value}`, onclick: async () => {
+        if (!(await confirmDlg(`¿Eliminar «${it.value}» de la lista?`, { danger: true }))) return;
+        try { await api(`/admin/catalog/item/${it.id}`, { method: 'DELETE' }); toast('Eliminado', 'ok'); load(); } catch (e) { toastErr(e); }
+      } }, '🗑️'));
+  }
+  async function addValue(listKey, parent, value = '') {
+    let v = value;
+    if (!v) { const r = await promptDlg(parent ? `Nuevo en ${parent}` : 'Nuevo valor', [{ key: 'v', label: 'Nombre', required: true }], { ok: 'Añadir' }); v = r && r.v.trim(); }
+    if (!v) return;
+    try { await api(`/admin/catalog/${listKey}`, { method: 'POST', body: { value: v, parent } }); toast(`Añadido «${v}»`, 'ok'); load(); } catch (e) { toastErr(e); }
+  }
+  async function rename(it) {
+    const r = await promptDlg(`Renombrar «${it.value}»`, [{ key: 'v', label: 'Nuevo nombre', value: it.value, required: true }], { ok: 'Renombrar' });
+    if (!r || !r.v.trim() || r.v.trim() === it.value) return;
+    try { const x = await api(`/admin/catalog/item/${it.id}`, { method: 'PUT', body: { value: r.v.trim() } }); toast(`Renombrado (${x.records} registros actualizados)`, 'ok'); if (current === it.value) current = r.v.trim(); load(); } catch (e) { toastErr(e); }
+  }
+  async function merge(listKey, from, to, parent) {
+    if (!(await confirmDlg(`Todos los registros con «${from}» pasarán a «${to}»${parent ? ` (en ${parent})` : ''} y «${from}» desaparecerá de la lista. ¿Continuar?`, { ok: 'Unificar' }))) { load(); return; }
+    try { const r = await api(`/admin/catalog/${listKey}/merge`, { method: 'POST', body: { from, to, parent } }); toast(`Unificado: ${r.records} registros actualizados`, 'ok'); load(); } catch (e) { toastErr(e); }
+  }
+  async function applySuggestions(listKey, items, parent = '') {
+    if (!(await confirmDlg(`Se unificarán ${items.length} valores con su sugerencia (se cambian en los registros). ¿Continuar?`, { ok: 'Aplicar' }))) return;
+    try {
+      const r = await api(`/admin/catalog/${listKey}/merge-many`, { method: 'POST', body: { items: items.map((u) => ({ from: u.value, to: u.suggest, parent: parent || u.parent })) } });
+      toast(`Unificados ${r.merged} valores (${r.records} registros)`, 'ok'); load();
+    } catch (e) { toastErr(e); }
+  }
+  async function fixCase() {
+    try {
+      const a = await api(`/admin/catalog/${parentList.key}/fix-case`, { method: 'POST' });
+      const b = childList ? await api(`/admin/catalog/${childList.key}/fix-case`, { method: 'POST' }) : { records: 0 };
+      toast(`Corregidos ${a.records + b.records} valores en los registros`, 'ok'); load();
+    } catch (e) { toastErr(e); }
+  }
+  function importCsv() {
+    const ta = h('textarea', { id: 'cat-csv', rows: 10, placeholder: `${parentList.singular};${childList ? childList.singular : ''}\nRenault;Kangoo\nRenault;Master\nFord;Transit` });
+    const file = h('input', { type: 'file', accept: '.csv,.txt', onchange: async () => { ta.value = await file.files[0].text(); } });
+    const m = modal({ title: '⬆ Importar CSV', size: 'sm',
+      content: h('div.stack', h('p.muted.small', `Una fila por línea: ${parentList.singular}${childList ? `;${childList.singular}` : ''} (separado por ; , o tabulador). Solo se añaden los que no estén.`),
+        file, h('div.field', h('label', { for: 'cat-csv' }, 'O pega el contenido'), ta)),
+      footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
+        try { const r = await api(`/admin/catalog/${parentList.key}/import`, { method: 'POST', body: { text: ta.value } }); toast(`Añadidos ${r.added} ${parentList.singular}s y ${r.added_children} ${childList ? childList.singular + 's' : ''}`, 'ok'); m.close(); load(); } catch (e) { toastErr(e); }
+      } }, 'Importar')] });
+  }
+  await load();
 }

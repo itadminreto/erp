@@ -180,7 +180,7 @@ test('orden numérico y filtro por columna', async () => {
 });
 
 test('la simulación detecta duplicados dentro del mismo fichero y no guarda nada', async () => {
-  const csv = 'Matrícula;Marca\nDUP1;A\nDUP1;B\n';
+  const csv = 'Matrícula;Marca\nDUP1;Renault\nDUP1;ford\n';
   const fd = new FormData(); fd.append('file', new Blob([csv], { type: 'text/csv' }), 'd.csv');
   const p = await admin.call('POST', '/apps/vehiculos/import/preview', undefined, { form: fd });
   const dry = await admin.call('POST', '/apps/vehiculos/import/commit', { token: p.body.token, mapping: p.body.mapping, dry_run: true });
@@ -878,7 +878,7 @@ test('vehículos: subapartados, traspasos con aceptación del centro de destino 
   // los subapartados no salen en el menú; Vehículos los anuncia
   assert.ok(!(await admin.call('GET', '/apps')).body.some((a) => a.key === 'vehiculos_revisiones'));
   const meta = (await admin.call('GET', '/apps/vehiculos')).body;
-  assert.deepEqual(meta.children.map((c) => c.key), ['vehiculos_revisiones', 'vehiculos_siniestros']);
+  assert.deepEqual(meta.children.map((c) => c.key).sort(), ['vehiculos_documentos', 'vehiculos_revisiones', 'vehiculos_siniestros']);
   // un vehículo en el centro 1 con una revisión
   const v = (await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: '7777 TRS', marca: 'Ford', estado: 'Activo' } })).body;
   assert.equal((await admin.call('POST', '/apps/vehiculos_revisiones/records', { data: { fecha: '2026-11-01', descripcion: 'Sin padre' } })).status, 400);
@@ -929,7 +929,7 @@ test('vehículos: subapartados, traspasos con aceptación del centro de destino 
   // estructura: exportar e importar en otra clave (como en otra instalación)
   const ex = (await admin.call('GET', `/admin/apps/${veh.id}/structure`)).body;
   assert.equal(ex.format, 'erp-app-structure');
-  assert.equal(ex.app.children.length, 2);
+  assert.equal(ex.app.children.length, 3);
   assert.ok(ex.app.reports.length >= 2);
   const copy = JSON.parse(JSON.stringify(ex));
   copy.app.key = 'flota2'; copy.app.name = 'Flota 2';
@@ -937,7 +937,7 @@ test('vehículos: subapartados, traspasos con aceptación del centro de destino 
   assert.equal((await admin.call('POST', '/admin/structure', { structure: copy, dry_run: true })).body.exists, false);
   const imp = await admin.call('POST', '/admin/structure', { structure: copy });
   assert.equal(imp.status, 200);
-  assert.deepEqual(imp.body.apps_created, ['Flota 2', 'Revisiones', 'Siniestros']);
+  assert.deepEqual(imp.body.apps_created, ['Flota 2', 'Documentos', 'Revisiones', 'Siniestros']);
   const apps2 = (await admin.call('GET', '/admin/apps')).body;
   const f2 = apps2.find((a) => a.key === 'flota2');
   assert.equal(f2.fields.length, veh.fields.filter((f) => f.active).length);
@@ -1010,4 +1010,53 @@ test('carga del maestro de vehículos de Delphi: simulación, ejecución, repeti
   assert.match(again.stdout, /se cargan: 0/);
   assert.equal(await count(), 3);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('vehículos: marca y modelo de la lista maestra, centro de trabajo, documentos PDF y sin filtro de estado', async () => {
+  const meta = (await admin.call('GET', '/apps/vehiculos')).body;
+  assert.equal(meta.app.state_filter, 0, 'sin Abiertos/Cerrados/Todos');
+  const f = Object.fromEntries(meta.fields.map((x) => [x.key, x]));
+  assert.equal(f.marca.type, 'lookup'); assert.equal(f.modelo.options.depends_on, 'marca');
+  assert.equal(f.centro_trabajo.type, 'center');
+  assert.ok(meta.lookups.vehiculo_marca.some((x) => x.value === 'Renault'));
+  assert.ok(meta.lookups.vehiculo_modelo.some((x) => x.value === 'Kangoo' && x.parent === 'Renault'));
+  // valores fuera de la lista: no; modelo de otra marca: no; con otras mayúsculas: se corrige
+  assert.equal((await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'LK 1', marca: 'Marcainventada' } })).status, 400);
+  assert.equal((await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'LK 2', marca: 'Renault', modelo: 'Transit' } })).status, 400);
+  const ok = await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: 'LK 3', marca: 'renault', modelo: 'kangoo', centro_trabajo: ids.c2 } });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  assert.equal(ok.body.data.marca, 'Renault'); assert.equal(ok.body.data.modelo, 'Kangoo'); assert.equal(ok.body.data.centro_trabajo, ids.c2);
+  // centro de trabajo inexistente
+  assert.equal((await admin.call('PUT', `/apps/vehiculos/records/${ok.body.id}`, { data: { centro_trabajo: 999999 } })).status, 400);
+  // valores antiguos (de datos importados) se respetan mientras no se cambien
+  await db.run("UPDATE records SET data = JSON_SET(data, '$.marca', 'VOLKSWAGUEN', '$.modelo', 'LT 46') WHERE id = ?", ok.body.id);
+  assert.equal((await admin.call('PUT', `/apps/vehiculos/records/${ok.body.id}`, { data: { marca: 'VOLKSWAGUEN', modelo: 'LT 46', km: 100 } })).status, 200);
+  // listas maestras: valores sin reconocer y unificar
+  const unk = (await admin.call('GET', '/admin/catalog/vehiculo_marca/unknown')).body;
+  assert.ok(unk.some((u) => u.value === 'VOLKSWAGUEN'));
+  const mg = await admin.call('POST', '/admin/catalog/vehiculo_marca/merge', { from: 'VOLKSWAGUEN', to: 'Volkswagen' });
+  assert.equal(mg.status, 200); assert.ok(mg.body.records >= 1);
+  assert.equal((await admin.call('GET', `/apps/vehiculos/records/${ok.body.id}`)).body.data.marca, 'Volkswagen');
+  assert.ok(!(await admin.call('GET', '/admin/catalog/vehiculo_marca/unknown')).body.some((u) => u.value === 'VOLKSWAGUEN'));
+  // añadir, renombrar (cambia los registros y sus modelos) e importar CSV
+  assert.equal((await admin.call('POST', '/admin/catalog/vehiculo_marca', { value: 'Tata' })).status, 201);
+  assert.equal((await admin.call('POST', '/admin/catalog/vehiculo_modelo', { value: 'Xenon', parent: 'Tata' })).status, 201);
+  const tata = (await admin.call('GET', '/admin/catalog/vehiculo_marca')).body.find((x) => x.value === 'Tata');
+  await admin.call('PUT', `/admin/catalog/item/${tata.id}`, { value: 'TATA Motors' });
+  assert.ok((await admin.call('GET', '/admin/catalog/vehiculo_modelo')).body.some((x) => x.value === 'Xenon' && x.parent === 'TATA Motors'));
+  const im = await admin.call('POST', '/admin/catalog/vehiculo_marca/import', { text: 'Marca;Modelo\nPiaggio;Porter Maxxi\nNueva Marca;Modelo X\n' });
+  assert.equal(im.body.added_children >= 2, true);
+  // documentos PDF en el subapartado
+  const pdf = 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4\n%prueba\n').toString('base64');
+  const d = await admin.call('POST', '/apps/vehiculos_documentos/records', { parent_id: ok.body.id, data: { tipo: 'Seguro / póliza', descripcion: 'Póliza 2027', archivos: [{ data: pdf, name: 'poliza.pdf' }] } });
+  assert.equal(d.status, 201, JSON.stringify(d.body));
+  const fileId = d.body.data.archivos[0].id;
+  const get = await fetch(`${base}/api/apps/vehiculos_documentos/records/${d.body.id}/files/${fileId}`, { headers: { cookie: '', 'X-Requested-With': 'erp' } });
+  assert.equal(get.status, 401, 'sin sesión no se descarga');
+  const dl = await admin.call('GET', `/apps/vehiculos_documentos/records/${d.body.id}/files/${fileId}`);
+  assert.equal(dl.status, 200); assert.equal(dl.body.subarray(0, 4).toString(), '%PDF');
+  assert.equal((await admin.call('POST', '/apps/vehiculos_documentos/records', { parent_id: ok.body.id, data: { descripcion: 'X', archivos: [{ data: 'data:text/html;base64,PGI+', name: 'x.html' }] } })).status, 400, 'tipos no admitidos');
+  assert.equal((await admin.call('POST', '/apps/vehiculos_documentos/records', { parent_id: ok.body.id, data: { descripcion: 'Sin archivo' } })).status, 400, 'archivo obligatorio');
+  const listDocs = (await admin.call('GET', `/apps/vehiculos_documentos/records?parent=${ok.body.id}`)).body;
+  assert.equal(listDocs.rows[0].data.archivos.count, 1, 'en la lista solo el número de archivos');
 });

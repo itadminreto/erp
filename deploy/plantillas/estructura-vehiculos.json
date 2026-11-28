@@ -14,6 +14,7 @@
     ],
     "transfers": 1,
     "center_kind": "coste",
+    "state_filter": 0,
     "form_layout": {
       "tabs": false,
       "items": [
@@ -33,6 +34,7 @@
           "section": "Estado y ubicación"
         },
         "estado",
+        "centro_trabajo",
         "ubicacion",
         "fecha_asignacion",
         "km",
@@ -92,24 +94,29 @@
       {
         "key": "marca",
         "label": "Marca",
-        "type": "text",
+        "type": "lookup",
         "width": "sm",
         "show_in_list": 1,
         "required": 0,
         "unique_value": 0,
         "height": 1,
-        "options": {}
+        "options": {
+          "list": "vehiculo_marca"
+        }
       },
       {
         "key": "modelo",
         "label": "Modelo",
-        "type": "text",
+        "type": "lookup",
         "width": "sm",
         "show_in_list": 1,
         "required": 0,
         "unique_value": 0,
         "height": 1,
-        "options": {}
+        "options": {
+          "list": "vehiculo_modelo",
+          "depends_on": "marca"
+        }
       },
       {
         "key": "tipo",
@@ -222,6 +229,19 @@
             "En venta": "#0ea5e9",
             "Baja": "#94a3b8"
           }
+        }
+      },
+      {
+        "key": "centro_trabajo",
+        "label": "Centro de trabajo",
+        "type": "center",
+        "width": "md",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "kind": "trabajo"
         }
       },
       {
@@ -664,6 +684,109 @@
       }
     ],
     "children": [
+      {
+        "key": "vehiculos_documentos",
+        "name": "Documentos",
+        "icon": "📎",
+        "color": "#64748b",
+        "description": "Seguros, permiso de circulación, ficha técnica, ITV y demás documentación en PDF",
+        "title_field": "descripcion",
+        "fields": [
+          {
+            "key": "tipo",
+            "label": "Tipo de documento",
+            "type": "select",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {
+              "choices": [
+                "Seguro / póliza",
+                "Permiso de circulación",
+                "Ficha técnica",
+                "ITV",
+                "Tarjeta de transporte",
+                "Factura",
+                "Contrato / renting",
+                "Otro"
+              ]
+            }
+          },
+          {
+            "key": "descripcion",
+            "label": "Descripción",
+            "type": "text",
+            "width": "lg",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "fecha",
+            "label": "Fecha",
+            "type": "date",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "vencimiento",
+            "label": "Vence",
+            "type": "date",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {
+              "due_alert": true
+            }
+          },
+          {
+            "key": "archivos",
+            "label": "Archivos (PDF, imagen, Word, Excel)",
+            "type": "file",
+            "width": "full",
+            "show_in_list": 1,
+            "required": 1,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "observaciones",
+            "label": "Observaciones",
+            "type": "textarea",
+            "width": "full",
+            "show_in_list": 0,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          }
+        ],
+        "form_layout": {
+          "tabs": false,
+          "items": [
+            {
+              "section": "Documento"
+            },
+            "tipo",
+            "descripcion",
+            "fecha",
+            "vencimiento",
+            "archivos",
+            "observaciones"
+          ]
+        }
+      },
       {
         "key": "vehiculos_revisiones",
         "name": "Revisiones",

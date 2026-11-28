@@ -115,6 +115,18 @@ Guarda también `APP_SECRET` o `data/secret.key`.
   y **⬆ Importar estructura** en otra instalación (crea o completa; nunca borra). Plantilla de Vehículos en
   `deploy/plantillas/estructura-vehiculos.json` (recoge los datos del antiguo programa Delphi).
 
+### Ficha del vehículo
+
+- **Centro de coste** (arriba; manda en permisos y traspasos) y **Centro de trabajo** (campo tipo «Centro»).
+- **Traspaso al guardar**: si se cambia el centro de coste y se pulsa Guardar, pregunta, guarda el resto y envía el
+  traspaso; el vehículo cambia de centro cuando el destino lo acepta (Inicio / ⇄ Traspasos).
+- **Marca y modelo** se eligen de la lista maestra (el modelo según la marca). Super admin → **📚 Listas maestras**:
+  añadir, renombrar, unificar (cambia los registros), eliminar, importar CSV «Marca;Modelo», corregir mayúsculas y
+  tildes, y unificar automáticamente las variantes mal escritas (MERCEDES → Mercedes-Benz, VOLSWAGEN → Volkswagen…).
+- **📎 Documentos**: subapartado para subir PDF, imágenes, Word o Excel (máx. 15 MB por archivo) con tipo, fechas y
+  aviso de vencimiento; se abren en el navegador o se descargan.
+- Sin el filtro «Abiertos / Cerrados / Todos» (Propiedades de la app → se puede volver a mostrar).
+
 ### Carga del maestro de vehículos del antiguo programa (Delphi / SQL Server)
 
 Solo el maestro (hoja RET001 de la exportación a Excel, con sus tablas de códigos). **Por defecto solo simula**:

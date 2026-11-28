@@ -91,6 +91,24 @@ function date(v) {
     (newChoices[fkey] = newChoices[fkey] || new Set()).add(t);
     return t;
   };
+  // marcas y modelos: a los de la lista maestra (con alias como MERCEDES → Mercedes-Benz); si no, se guardan tal cual
+  const { ALIAS } = require('../server/templates/marcas');
+  const { suggestFor } = require('../server/catalog');
+  const brands = (await db.all("SELECT value FROM catalog WHERE list_key = 'vehiculo_marca'")).map((x) => x.value);
+  const models = await db.all("SELECT value, parent FROM catalog WHERE list_key = 'vehiculo_modelo'");
+  const unknownBrands = new Set(), unknownModels = new Set();
+  const brandOf = (raw) => {
+    const v = clean(raw); if (!v) return '';
+    const hit = suggestFor(v, brands, ALIAS); // MERCEDES → Mercedes-Benz, VOLSWAGEN → Volkswagen, B.M.W. → BMW…
+    if (!hit) unknownBrands.add(v);
+    return hit || v;
+  };
+  const modelOf = (brand, raw) => {
+    const v = clean(raw); if (!v) return '';
+    const hit = models.find((m) => m.parent === brand && plain(m.value) === plain(v));
+    if (!hit) unknownModels.add(`${brand} ${v}`);
+    return hit ? hit.value : v;
+  };
   const MOT = { V: 'Vendido', D: 'Definitiva', T: 'Temporal', TC: 'Tránsito comunitario', E: 'Exportación', EV: 'En venta' };
   const AMB = { DP: 'Servicio público pesado', PC: 'Servicio particular', VP: 'Viajeros particular', XP: 'XPC' };
   const TIT = { A: 'Asociación', S: 'Cooperativa', P: 'Particular' };
@@ -140,7 +158,9 @@ function date(v) {
     const dt = (col, key) => { const v = date(r[col]); if (v === null) { warn(`${fields[key].label}: fecha imposible «${r[col]}» (se deja vacía)`); return; } if (v) d[key] = v; };
     const txt = (col, key) => { const v = clean(r[col]); if (v) d[key] = v; };
     d.matricula = mat;
-    txt('MAR', 'marca'); txt('MOD', 'modelo'); txt('BAS', 'bastidor');
+    const marca = brandOf(r.MAR); if (marca) d.marca = marca;
+    const modelo = modelOf(marca, r.MOD); if (modelo) d.modelo = modelo;
+    txt('BAS', 'bastidor');
     const tit = String(r.TIT).trim();
     if (TIT[tit]) d.titular = TIT[tit]; else if (tit) warn(`titular «${tit}» sin equivalencia (se deja vacío)`);
     if (L.tipo[String(r.TIPOVE).trim()]) d.tipo = choice('tipo', L.tipo[String(r.TIPOVE).trim()]);
@@ -177,6 +197,7 @@ function date(v) {
   console.log(`Filas en el fichero: ${rows.length} · se cargan: ${out.length} (${Object.entries(states).map(([k, v]) => `${v} ${k}`).join(', ')}) · omitidas: ${count('omitida')} · avisos: ${count('aviso')}`);
   console.log(`Centros de coste: ${Object.keys(centerPlan).length} delegaciones · ya existen ${Object.values(centerPlan).filter((c) => c.id).length} · a crear ${toCreate.length}${toFix.length ? ` · a marcar como «trabajo y coste» ${toFix.length}` : ''}`);
   if (toCreate.length) console.log('  A crear: ' + toCreate.map((c) => `${c.code} ${c.name}`).join(', '));
+  console.log(`Marcas: ${unknownBrands.size} no están en la lista y ${unknownModels.size} modelos tampoco: se guardan tal cual y luego se unifican en Super admin → Listas maestras.`);
   for (const [k, set] of Object.entries(newChoices)) console.log(`Opciones nuevas en «${fields[k].label}»: ${[...set].join(', ')}`);
   if (tooLong.length) console.log(`⚠ ${tooLong.length} vehículos superan el máximo de caracteres de algún campo (p. ej. ${tooLong.slice(0, 3).join(', ')}): amplíalo en Apps y campos → Vehículos o se quedarán fuera.`);
   if (toCreate.length && !CREATE_CENTERS) console.log('\n⚠ Faltan centros: añade --crear-centros para crearlos (o créalos tú con el código de la delegación) y vuelve a lanzarlo.');

@@ -334,6 +334,19 @@ async function init() {
     KEY idx_files_record (record_id),
     CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Documentos (PDF, Office…) en record_files: tipos MIME largos
+  await pool.query('ALTER TABLE record_files MODIFY mime VARCHAR(120) NOT NULL');
+  // Listas maestras (marcas y modelos de vehículo…): valor y, si depende de otra lista, su valor padre
+  await pool.query(`CREATE TABLE IF NOT EXISTS catalog (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    list_key VARCHAR(40) NOT NULL,
+    value VARCHAR(150) NOT NULL,
+    parent VARCHAR(150) NOT NULL DEFAULT '',
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    UNIQUE KEY uq_catalog (list_key, parent, value)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Filtro «Abiertos / Cerrados / Todos» en la lista (se puede ocultar por app, p. ej. Vehículos)
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS state_filter TINYINT(1) NOT NULL DEFAULT 1');
   // Subapartados (apps hijas: p. ej. Revisiones dentro de Vehículos), traspasos entre centros y tipo de centro por app
   await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS parent_app_id INT NULL');
   await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS transfers TINYINT(1) NOT NULL DEFAULT 0');
@@ -431,7 +444,17 @@ async function init() {
   }
   // Vehículos: flota por centro de coste con traspasos, subapartados Revisiones y Siniestros y los datos del
   // antiguo programa (Delphi). Se completa la app existente sin borrar nada. Una sola vez.
-  const vhDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_vehiculos_v2'");
+  // catálogo inicial de marcas y modelos (lista maestra). Una sola vez.
+  const mkDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_catalog_marcas_v2'");
+  if (!mkDone.length) {
+    const { MARCAS } = require('./templates/marcas');
+    for (const [marca, modelos] of Object.entries(MARCAS)) {
+      await pool.query('INSERT IGNORE INTO catalog (list_key, value, parent) VALUES (?,?,?)', ['vehiculo_marca', marca, '']);
+      for (const m of modelos) await pool.query('INSERT IGNORE INTO catalog (list_key, value, parent) VALUES (?,?,?)', ['vehiculo_modelo', m, marca]);
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_catalog_marcas_v2', '1')");
+  }
+  const vhDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_vehiculos_v3'");
   if (!vhDone.length) {
     if ((await pool.query("SELECT 1 FROM apps WHERE `key` = 'vehiculos'")).length) {
       const { importStructure } = require('./structure');
@@ -441,7 +464,7 @@ async function init() {
       const [k] = await pool.query("SELECT COUNT(*) n FROM centers WHERE kind IN ('coste', 'ambos') AND deleted_at IS NULL");
       if (!Number(k.n)) await pool.query("UPDATE apps SET center_kind = '' WHERE `key` = 'vehiculos'");
     }
-    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_vehiculos_v2', '1')");
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_vehiculos_v3', '1')");
   }
   // Informe «Parte diario por grupo» en Recados (si aún no tiene informes). Una sola vez.
   const repDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_report_v1'");
@@ -569,7 +592,7 @@ async function nextNumber(appId, companyId) {
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
 const BACKUP_TABLES = ['companies', 'centers', 'work_groups', 'work_group_members', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
-  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files', 'app_reports', 'record_transfers'];
+  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files', 'app_reports', 'record_transfers', 'catalog'];
 
 const close = () => pool.end();
 

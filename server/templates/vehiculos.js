@@ -21,7 +21,8 @@ const due = { options: { due_alert: true } };
 const fields = [
   // Identificación
   f('matricula', 'Matrícula', 'text', 'sm', { required: 1, show_in_list: 1, unique_value: 1 }),
-  f('marca', 'Marca', 'text', 'sm', list), f('modelo', 'Modelo', 'text', 'sm', list),
+  f('marca', 'Marca', 'lookup', 'sm', { ...list, options: { list: 'vehiculo_marca' } }),
+  f('modelo', 'Modelo', 'lookup', 'sm', { ...list, options: { list: 'vehiculo_modelo', depends_on: 'marca' } }),
   f('tipo', 'Tipo de vehículo', 'select', 'sm', { ...list, ...sel(TIPOS) }),
   f('bastidor', 'Nº bastidor', 'text', 'md'),
   f('titular', 'Titular', 'select', 'sm', { ...list, ...sel(['Asociación', 'Cooperativa', 'Particular']) }),
@@ -29,6 +30,7 @@ const fields = [
   f('tara', 'Tara (kg)', 'number', 'xs'), f('pma', 'PMA (kg)', 'number', 'xs'),
   // Estado y ubicación
   f('estado', 'Estado', 'select', 'sm', { ...list, options: { choices: ['Activo', 'En venta', 'Baja'], colors: { Activo: '#10b981', 'En venta': '#0ea5e9', Baja: '#94a3b8' } } }),
+  f('centro_trabajo', 'Centro de trabajo', 'center', 'md', { options: { kind: 'trabajo' } }),
   f('ubicacion', 'Ubicación', 'select', 'sm', sel(UBICACIONES)),
   f('fecha_asignacion', 'Asignado al centro desde', 'date', 'sm'),
   f('km', 'Kilómetros', 'number', 'sm'),
@@ -56,7 +58,7 @@ const fields = [
 ];
 const sections = [
   ['Identificación', ['matricula', 'marca', 'modelo', 'tipo', 'bastidor', 'titular', 'fecha_matriculacion', 'tara', 'pma']],
-  ['Estado y ubicación', ['estado', 'ubicacion', 'fecha_asignacion', 'km', 'conductor']],
+  ['Estado y ubicación', ['estado', 'centro_trabajo', 'ubicacion', 'fecha_asignacion', 'km', 'conductor']],
   ['Compra', ['procedencia', 'fecha_compra', 'valor_compra', 'fecha_alta']],
   ['Seguro', ['seguro_compania', 'seguro_poliza', 'seguro_importe', 'seguro_alta', 'seguro_vencimiento', 'seguro_baja', 'seguro_motivo_baja']],
   ['Tarjeta de transporte', ['tarjeta_transporte', 'tarjeta_ambito', 'tarjeta_alta', 'tarjeta_vencimiento', 'tarjeta_baja', 'tarjeta_motivo_baja']],
@@ -69,7 +71,7 @@ const VEHICULOS = {
   format: 'erp-app-structure', version: 1,
   app: {
     key: 'vehiculos', name: 'Vehículos', icon: '🚐', color: '#ef4444', description: 'Flota por centro de coste: ITV, seguros, tarjetas, revisiones, siniestros y traspasos',
-    title_field: 'matricula', status_field: 'estado', closed_values: ['Baja'], transfers: 1, center_kind: 'coste',
+    title_field: 'matricula', status_field: 'estado', closed_values: ['Baja'], transfers: 1, center_kind: 'coste', state_filter: 0,
     form_layout: layout(sections),
     fields,
     reports: [
@@ -79,6 +81,18 @@ const VEHICULOS = {
         group_by: '_center', page_per_group: false, date_field: 'itv_proxima', period: 'month', sort: 'itv_proxima', dir: 'asc', layout: 'table', landscape: false, only_open: true, blank_cols: ['Cita ITV'], signature: '', notes: '' } },
     ],
     children: [
+      {
+        key: 'vehiculos_documentos', name: 'Documentos', icon: '📎', color: '#64748b', description: 'Seguros, permiso de circulación, ficha técnica, ITV y demás documentación en PDF',
+        title_field: 'descripcion',
+        fields: [
+          f('tipo', 'Tipo de documento', 'select', 'sm', { ...list, ...sel(['Seguro / póliza', 'Permiso de circulación', 'Ficha técnica', 'ITV', 'Tarjeta de transporte', 'Factura', 'Contrato / renting', 'Otro']) }),
+          f('descripcion', 'Descripción', 'text', 'lg', list),
+          f('fecha', 'Fecha', 'date', 'sm', list), f('vencimiento', 'Vence', 'date', 'sm', { ...list, ...due }),
+          f('archivos', 'Archivos (PDF, imagen, Word, Excel)', 'file', 'full', { required: 1, show_in_list: 1 }),
+          f('observaciones', 'Observaciones', 'textarea', 'full'),
+        ],
+        form_layout: layout([['Documento', ['tipo', 'descripcion', 'fecha', 'vencimiento', 'archivos', 'observaciones']]]),
+      },
       {
         key: 'vehiculos_revisiones', name: 'Revisiones', icon: '🔧', color: '#0ea5e9', description: 'Revisiones y trabajos de taller de cada vehículo',
         title_field: 'descripcion',

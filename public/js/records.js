@@ -57,8 +57,9 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
     }
     const i = choices.indexOf(v); return i < 0 ? '#94a3b8' : PALETTE[i % PALETTE.length];
   }
-  const hasStatus = !!(meta.app.status_field && fieldsByKey[meta.app.status_field] && closedVals.length);
+  const hasStatus = !!(meta.app.status_field && fieldsByKey[meta.app.status_field] && closedVals.length) && meta.app.state_filter !== 0;
   // la primera vez, las apps con estado se abren en «Abiertos» (p. ej. vehículos en activo, sin los de baja)
+  if (!hasStatus) st.state = ''; // sin filtro de estado (p. ej. Vehículos): siempre todos
   if (hasStatus && !embedded) { let saved = null; try { saved = JSON.parse(sessionStorage.getItem(persistKey) || 'null'); } catch { /* nada */ } if (!saved || saved.state === undefined) st.state = 'open'; }
   const groupsById = Object.fromEntries((meta.groups || []).map((g) => [g.id, g]));
   const groupFields = meta.fields.filter((f) => f.type === 'group');
@@ -79,6 +80,7 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
   // ----- columnas (diseño por usuario) -----
   const isChild = !!meta.parent_app;
   const allCenters = meta.app.transfers ? await api(`/apps/${key}/transfer-centers`).catch(() => meta.centers) : meta.centers;
+  const companyCenterName = (id) => { const c = (meta.company_centers || []).find((x) => x.id === Number(id)); return c ? c.name : id ? `centro ${id}` : ''; };
   const centerLabel = (id) => { const c = allCenters.find((x) => x.id === Number(id)) || meta.centers.find((x) => x.id === Number(id)); return c ? `${c.code ? c.code + ' · ' : ''}${c.name}` : `centro ${id}`; };
   /** Abre un registro de la app padre (desde la columna «Vehículo» de un subapartado). */
   const openParent = (id) => { try { sessionStorage.setItem('openRec', JSON.stringify({ app: meta.parent_app.key, id })); } catch { /* nada */ } location.hash = '#/app/' + meta.parent_app.key; };
@@ -145,7 +147,7 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
   const mineBtn = hasOwner ? h('button.btn', { class: st.mine ? 'on-toggle' : '', title: [meta.app.owner_field && fieldsByKey[meta.app.owner_field] ? `asignados a mí en «${fieldsByKey[meta.app.owner_field].label}»` : '', groupFields.length ? 'asignados a mis grupos de trabajo' : ''].filter(Boolean).join(' o ').replace(/^./, (c) => 'Solo los ' + c), onclick: () => {
     st.mine = !st.mine; st.page = 1; mineBtn.classList.toggle('on-toggle', st.mine); load();
   } }, '👤 Míos') : null;
-  const filterable = meta.fields.filter((f) => ['select', 'user', 'checkbox', 'group'].includes(f.type));
+  const filterable = meta.fields.filter((f) => ['select', 'user', 'checkbox', 'group', 'center'].includes(f.type) || (f.type === 'lookup' && !f.options.depends_on));
   // filtros por fecha: atajo (hoy, esta semana…) o rango; se guardan como <campo>__p, __from, __to
   const dateFilterable = meta.fields.filter((f) => ['date', 'datetime'].includes(f.type));
   const DATE_PRESETS = [['', '— Cualquier fecha —'], ['today', 'Hoy'], ['tomorrow', 'Mañana'], ['week', 'Esta semana'], ['next7', 'Próximos 7 días'],
@@ -185,7 +187,7 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
   };
   const filterBtn = filterable.length || dateFilterable.length ? h('button.btn', { onclick: () => openFilters() }, '⚲ ', h('span.lbl', 'Filtros'), h('span.badge', { hidden: true })) : null;
   const activeBar = h('div.active-filters');
-  const filterText = (k, v) => { const f = fieldsByKey[k]; if (!f) return v; return f.type === 'user' ? (usersById[v] ? usersById[v].name : v) : f.type === 'group' ? groupLabel(groupsById[v]) || v : f.type === 'checkbox' ? (v === '1' ? 'Sí' : 'No') : v; };
+  const filterText = (k, v) => { const f = fieldsByKey[k]; if (!f) return v; return f.type === 'user' ? (usersById[v] ? usersById[v].name : v) : f.type === 'group' ? groupLabel(groupsById[v]) || v : f.type === 'center' ? companyCenterName(v) : f.type === 'checkbox' ? (v === '1' ? 'Sí' : 'No') : v; };
   function drawActiveFilters() {
     const act = Object.entries(st.filters).filter(([k, v]) => v !== '' && fieldsByKey[k]);
     const dact = dateFilterable.filter((f) => st.filters[f.key + '__p']);
@@ -204,7 +206,9 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
       const cur = st.filters[f.key] ?? '';
       const opts = f.type === 'select' ? (f.options.choices || []).map((c) => [c, c])
         : f.type === 'user' ? meta.users.map((u) => [String(u.id), u.name])
-        : f.type === 'group' ? (meta.groups || []).map((g) => [String(g.id), groupLabel(g) + (g.mine ? ' · mi grupo' : '')]) : [['1', 'Sí'], ['0', 'No']];
+        : f.type === 'group' ? (meta.groups || []).map((g) => [String(g.id), groupLabel(g) + (g.mine ? ' · mi grupo' : '')])
+        : f.type === 'center' ? (meta.company_centers || []).filter((c) => !f.options.kind || c.kind === f.options.kind || c.kind === 'ambos').map((c) => [String(c.id), `${c.code ? c.code + ' · ' : ''}${c.name}`])
+        : f.type === 'lookup' ? ((meta.lookups || {})[f.options.list] || []).map((x) => [x.value, x.value]) : [['1', 'Sí'], ['0', 'No']];
       sels[f.key] = h('select', h('option', { value: '' }, '— Cualquiera —'), opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === v }, l)));
       sels[f.key].id = 'ff-' + f.key;
       return h('div.field', h('label', { for: sels[f.key].id }, f.label), sels[f.key]);
@@ -297,6 +301,7 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
   function cellText(r, c) {
     if (c === '_center') return r.center_code || r.center_name || '';
     if (c === '_parent') return r.parent_title || (r.parent_number ? `Nº ${r.parent_number}` : '');
+    if (fieldsByKey[c] && fieldsByKey[c].type === 'file') { const v = r.data[c]; return Array.isArray(v) ? v.map((x) => x.name).join(', ') : v && v.count ? `${v.count} documento(s)` : ''; }
     const f = fieldsByKey[c];
     if (f && f.type === 'date') return fmtDate(r.data[c]);
     if (f && f.type === 'password') return r.data[c] ? '••••••' : '';
@@ -667,6 +672,8 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
       case 'ip': return h('span.mono', v);
       case 'signature': return v && (v.signed || v.img) ? h('span.chip.ok', '✍ Firmado') : '';
       case 'image': { const n = Array.isArray(v) ? v.length : (v && v.count) || 0; return n ? h('span.chip', `🖼 ${n}`) : ''; }
+      case 'file': { const n = Array.isArray(v) ? v.length : (v && v.count) || 0; return n ? h('span.chip', { title: Array.isArray(v) ? v.map((x) => x.name).join(', ') : '' }, `📎 ${n}`) : ''; }
+      case 'center': return companyCenterName(v);
       default: return String(v);
     }
   }
@@ -885,12 +892,15 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
     }
     const transfersOn = !!meta.app.transfers;
     const centerOpts = meta.centers.filter((c) => (isNew ? c.can_create : true) || (rec && rec.center_id === c.id));
-    const centerSelect = h('select', { disabled: !editable || (transfersOn && !isNew && !state.me.is_superadmin && !!(rec && rec.center_id)),
-      title: transfersOn && !isNew ? 'Para cambiar de centro usa «⇄ Traspasar»' : '' },
+    // con traspasos: al cambiar el centro y guardar se pide el traspaso (lo acepta el centro de destino)
+    const centerSelect = h('select', { disabled: !editable || (transfersOn && !!(rec && rec.transfer_to)),
+      title: transfersOn && !isNew ? 'Si lo cambias, al guardar se enviará un traspaso que tiene que aceptar el centro de destino' : '' },
       (isNew ? meta.can_create_without_center : true) ? h('option', { value: '' }, '— Sin centro —') : null,
-      centerOpts.map((c) => h('option', { value: c.id, selected: rec ? rec.center_id === c.id : String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
+      // destinos de traspaso: todos los centros de la empresa del tipo que usa la app
+      (transfersOn && !isNew ? [...centerOpts, ...allCenters.filter((c) => !centerOpts.some((x) => x.id === c.id))] : centerOpts).map((c) => h('option', { value: c.id, selected: rec ? rec.center_id === c.id : String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
 
     const fieldEls = {};
+    const lookupSelects = []; // campos «Lista maestra» (marca, modelo…)
     const groupSelects = []; // campos «Grupo de trabajo»: solo los grupos de la sede elegida
     for (const f of meta.fields) fieldEls[f.key] = buildField(f);
     const fillGroups = () => {
@@ -906,6 +916,22 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
     };
     fillGroups();
     centerSelect.addEventListener('change', fillGroups);
+    const fillLookup = ({ f, input }) => {
+      const dep = f.options.depends_on;
+      const parentVal = dep && inputs[dep] ? inputs[dep].value : '';
+      const cur = input.value || input.dataset.current;
+      const all = ((meta.lookups || {})[f.options.list] || []).filter((x) => !dep || x.parent.toLowerCase() === String(parentVal).toLowerCase());
+      const hit = all.find((x) => x.value.toLowerCase() === String(cur).toLowerCase());
+      clear(input, h('option', { value: '' }, dep && !parentVal ? `— Elige antes ${fieldsByKey[dep] ? fieldsByKey[dep].label.toLowerCase() : ''} —` : '—'),
+        cur && !hit ? h('option', { value: cur, selected: true }, `${cur} (valor antiguo)`) : null,
+        all.map((x) => h('option', { value: x.value, selected: hit && hit.value === x.value }, x.value)));
+      input.dataset.current = '';
+    };
+    lookupSelects.forEach(fillLookup);
+    for (const ls of lookupSelects) {
+      const dep = ls.f.options.depends_on;
+      if (dep && inputs[dep] && inputs[dep].addEventListener) inputs[dep].addEventListener('change', () => { ls.input.value = ''; fillLookup(ls); });
+    }
     // al elegir un grupo sin sede, se pone la sede del grupo
     for (const sel of groupSelects) sel.addEventListener('change', () => {
       const g = groupsById[sel.value];
@@ -1109,6 +1135,54 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
           v && !(f.options.choices || []).includes(v) ? h('option', { value: v, selected: true }, v) : null); break;
         case 'multiselect': input = h('select', { multiple: true, disabled: dis, size: Math.min(6, (f.options.choices || []).length || 3) }, (f.options.choices || []).map((c) => h('option', { value: c, selected: Array.isArray(v) && v.includes(c) }, c))); break;
         case 'user': input = h('select', { disabled: dis }, h('option', { value: '' }, '—'), meta.users.map((u) => h('option', { value: u.id, selected: Number(v) === u.id }, u.name))); break;
+        case 'center': { // otro centro (p. ej. el de trabajo); se puede elegir cualquiera de la empresa del tipo indicado
+          const kind = f.options.kind;
+          const list = (meta.company_centers || []).filter((c) => !kind || c.kind === kind || c.kind === 'ambos' || Number(v) === c.id);
+          input = h('select', { disabled: dis }, h('option', { value: '' }, '—'), list.map((c) => h('option', { value: c.id, selected: Number(v) === c.id }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
+          break;
+        }
+        case 'lookup': { // lista maestra; si depende de otro campo (modelo → marca), solo sus valores
+          input = h('select', { disabled: dis });
+          input.dataset.current = v || '';
+          lookupSelects.push({ f, input });
+          break;
+        }
+        case 'file': {
+          // documentos: guardados { id, name, mime, size } o nuevos { data, name } (se suben al guardar)
+          let list = Array.isArray(v) ? v.map((x) => ({ ...x })) : [];
+          input = { tagName: 'FILES', changed: false, get value() { return list.map((x) => (x.id ? { id: x.id } : { data: x.data, name: x.name })); } };
+          const box = h('div.file-list');
+          const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+          const icon = (x) => (/pdf/.test(x.mime || x.name) ? '📕' : /image/.test(x.mime || '') ? '🖼' : /sheet|excel|xls|ods|csv/.test(x.mime || x.name) ? '📗' : /word|doc|odt/.test(x.mime || x.name) ? '📘' : '📄');
+          const urlOf = (x) => `/api/apps/${key}/records/${rec.id}/files/${x.id}`;
+          const draw = () => clear(box, list.length ? list.map((x, i) => h('div.file-row', { class: x.id ? '' : 'new' },
+            h('span.file-ico', { 'aria-hidden': 'true' }, icon(x)),
+            x.id ? h('a.file-name', { href: urlOf(x), target: '_blank', rel: 'noopener', title: 'Abrir' }, x.name) : h('span.file-name', x.name),
+            h('span.muted.small', `${x.size ? kb(x.size) : ''}${x.id ? '' : ' · pendiente de guardar'}`),
+            x.id ? h('a.btn.sm.ghost', { href: urlOf(x) + '?download=1', title: 'Descargar', 'aria-label': `Descargar ${x.name}` }, '⬇') : null,
+            !dis ? h('button.btn.sm.ghost', { type: 'button', title: 'Quitar', 'aria-label': `Quitar ${x.name}`, onclick: () => { list.splice(i, 1); input.changed = true; draw(); } }, '✕') : null))
+            : h('div.muted.small', 'Sin documentos'));
+          const pick = h('input', { type: 'file', multiple: true, hidden: true, accept: '.pdf,image/*,.doc,.docx,.xls,.xlsx,.odt,.ods,.txt,.csv', onchange: async () => {
+            for (const file of [...pick.files]) {
+              if (file.size > 15 * 1024 * 1024) { toast(`«${file.name}» supera 15 MB`, 'error'); continue; }
+              const data = await new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = () => ko(fr.error); fr.readAsDataURL(file); });
+              list.push({ data, name: file.name, size: file.size, mime: file.type }); input.changed = true;
+            }
+            pick.value = ''; draw();
+          } });
+          // arrastrar y soltar
+          const zone = h('div.file-field', box, !dis ? h('div.file-actions', h('button.btn.sm', { type: 'button', onclick: () => pick.click() }, '📎 Añadir documentos'),
+            h('span.muted.small', 'o arrástralos aquí · PDF, imagen, Word, Excel · máx. 15 MB'), pick) : null);
+          if (!dis) {
+            zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag'); });
+            zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+            zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('drag'); const dt = new DataTransfer(); [...e.dataTransfer.files].forEach((x) => dt.items.add(x)); pick.files = dt.files; pick.dispatchEvent(new Event('change')); });
+          }
+          draw();
+          inputs[f.key] = input;
+          return h('div.field', { class: 'w-' + ({ half: 'md', third: 'sm' }[f.width] || f.width || 'md'), dataset: { key: f.key } },
+            h('label', f.label, f.required ? h('span.req', '*') : null), zone, f.help ? h('div.help', f.help) : null);
+        }
         case 'group': input = h('select', { disabled: dis }); input.dataset.current = v || ''; groupSelects.push(input); break;
         case 'password': {
           const hasValue = v === MASK;
@@ -1154,7 +1228,7 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
       for (const f of meta.fields) {
         const i = inputs[f.key];
         if (f.type === 'password') { if (dirtyPw.has(f.key)) data[f.key] = i.value; continue; }
-        if (f.type === 'signature' || f.type === 'image') { if (i.changed) data[f.key] = i.value; continue; }
+        if (f.type === 'signature' || f.type === 'image' || f.type === 'file') { if (i.changed || (isNew && f.type === 'file')) data[f.key] = i.value; continue; }
         if (f.type === 'checkbox') data[f.key] = i.checked;
         else if (f.type === 'multiselect') data[f.key] = [...i.selectedOptions].map((o) => o.value);
         else data[f.key] = i.value;
@@ -1201,7 +1275,7 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
             } catch (e) { toastErr(e); }
           } }, 'Anular') : null);
       } else if (rec.can.edit) {
-        transferBox = h('button.btn.transfer-btn', { type: 'button', onclick: () => transferDlg(rec, () => { m.close(); load(); }) }, '⇄ Traspasar a otro centro');
+        transferBox = h('div.muted.small.transfer-hint', '⇄ Para traspasarlo, elige otro centro y pulsa Guardar: el centro de destino tendrá que aceptarlo.');
       }
     }
     const dataPane = h('div', { style: { ...(labelSize ? { '--lbl-fs': labelSize + 'px' } : {}), ...(inputSize ? { '--inp-fs': inputSize + 'px' } : {}) } },
@@ -1259,9 +1333,20 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
         saveBtn.disabled = true;
         try {
           const body = collect();
+          // cambio de centro con traspasos: se confirma y se envía la solicitud al centro de destino
+          let transferTo = null, transferNote = '';
+          if (transfersOn && !isNew && rec.center_id && body.center_id && Number(body.center_id) !== rec.center_id) {
+            const ok = await transferConfirm(rec, Number(body.center_id));
+            if (!ok) { saveBtn.disabled = false; return; }
+            transferTo = Number(body.center_id); transferNote = ok.note;
+            delete body.center_id; // el centro cambia cuando lo acepte el destino
+          }
           if (isNew) await api(`/apps/${key}/records`, { method: 'POST', body });
           else await api(`/apps/${key}/records/${rec.id}`, { method: 'PUT', body });
-          toast(isNew ? 'Registro creado' : 'Cambios guardados', 'ok');
+          if (transferTo) {
+            await api(`/apps/${key}/records/${rec.id}/transfer`, { method: 'POST', body: { to_center: transferTo, note: transferNote } });
+            toast(`Cambios guardados y traspaso enviado a ${centerLabel(transferTo)}: queda pendiente de que lo acepten`, 'ok');
+          } else toast(isNew ? 'Registro creado' : 'Cambios guardados', 'ok');
           m.close(); load(); onCountsChanged && onCountsChanged();
         } catch (e) {
           toastErr(e); saveBtn.disabled = false;
@@ -1279,6 +1364,19 @@ export async function renderApp(root, key, onCountsChanged, opts = {}) {
 
   // ----- traspasos entre centros -----
   const TR_STATUS = { pending: ['Pendiente', 'warn'], accepted: ['Aceptado', 'ok'], rejected: ['Rechazado', 'danger'], cancelled: ['Anulado', ''] };
+  /** Confirmación del traspaso al guardar con otro centro. Devuelve { note } o null. */
+  function transferConfirm(rec, to) {
+    return new Promise((resolve) => {
+      let out = null;
+      const note = h('textarea', { id: 'tr-note2', rows: 3, placeholder: 'Motivo, quién lo lleva, cuándo llega… (opcional)' });
+      const m = modal({ title: '⇄ ¿Traspasar a otro centro?', size: 'sm',
+        content: h('div.stack', h('p', `${rec.data[meta.app.title_field] || 'Nº ' + rec.number} pasará de `, h('strong', centerLabel(rec.center_id)), ' a ', h('strong', centerLabel(to)), '.'),
+          h('p.muted.small', 'Se guardan el resto de cambios y se envía el traspaso. Seguirá en su centro actual hasta que el centro de destino lo acepte desde su menú principal.'),
+          h('div.field', h('label', { for: 'tr-note2' }, 'Nota para el centro de destino'), note)),
+        footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: () => { out = { note: note.value }; m.close(); } }, 'Guardar y enviar traspaso')],
+        onClose: () => resolve(out) });
+    });
+  }
   async function transferDlg(rec, after) {
     const dests = allCenters.filter((c) => c.id !== rec.center_id);
     if (!dests.length) return toast('No hay otro centro al que traspasar', 'error');
