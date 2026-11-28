@@ -867,3 +867,83 @@ test('panel del sistema: estado, sesiones con IP y navegador, desconectar e inac
   // auditoría
   assert.ok((await admin.call('GET', '/admin/audit?action=logout_forced')).body.total >= 2);
 });
+
+test('vehículos: subapartados, traspasos con aceptación del centro de destino y estructura exportable', async () => {
+  const apps = (await admin.call('GET', '/admin/apps')).body;
+  const veh = apps.find((a) => a.key === 'vehiculos');
+  assert.equal(veh.transfers, 1); assert.equal(veh.center_kind, 'coste'); assert.equal(veh.status_field, 'estado');
+  const rev = apps.find((a) => a.key === 'vehiculos_revisiones'); const sin = apps.find((a) => a.key === 'vehiculos_siniestros');
+  assert.equal(rev.parent_app_id, veh.id); assert.equal(sin.parent_app_id, veh.id);
+  assert.equal(veh.fields.find((f) => f.key === 'seguro_compania').type, 'select', 'texto convertido a lista');
+  // los subapartados no salen en el menú; Vehículos los anuncia
+  assert.ok(!(await admin.call('GET', '/apps')).body.some((a) => a.key === 'vehiculos_revisiones'));
+  const meta = (await admin.call('GET', '/apps/vehiculos')).body;
+  assert.deepEqual(meta.children.map((c) => c.key), ['vehiculos_revisiones', 'vehiculos_siniestros']);
+  // un vehículo en el centro 1 con una revisión
+  const v = (await admin.call('POST', '/apps/vehiculos/records', { center_id: ids.c1, data: { matricula: '7777 TRS', marca: 'Ford', estado: 'Activo' } })).body;
+  assert.equal((await admin.call('POST', '/apps/vehiculos_revisiones/records', { data: { fecha: '2026-11-01', descripcion: 'Sin padre' } })).status, 400);
+  const r1 = await admin.call('POST', '/apps/vehiculos_revisiones/records', { parent_id: v.id, center_id: ids.c2, data: { fecha: '2026-11-01', km: 1000, descripcion: 'Cambio de aceite', piezas_revisadas: ['Filtro de aceite'] } });
+  assert.equal(r1.status, 201);
+  assert.equal(r1.body.center_id, ids.c1, 'el subapartado va en el centro de su vehículo');
+  assert.equal(r1.body.parent_title, '7777 TRS');
+  assert.equal((await admin.call('GET', `/apps/vehiculos_revisiones/records?parent=${v.id}`)).body.total, 1);
+  // importar revisiones por matrícula (sin espacios)
+  const prev = await admin.call('POST', '/apps/vehiculos_revisiones/import/preview', undefined, { form: (() => { const fd = new FormData(); fd.append('file', new Blob(['Matrícula;Fecha;Trabajo realizado\n7777-trs;02/11/2026;Neumáticos\nNOEXISTE;03/11/2026;X\n']), 'r.csv'); return fd; })() });
+  assert.equal(prev.status, 200, JSON.stringify(prev.body));
+  assert.equal(prev.body.mapping[0], '_parent');
+  const com = await admin.call('POST', '/apps/vehiculos_revisiones/import/commit', { token: prev.body.token, mapping: prev.body.mapping });
+  assert.equal(com.body.created, 1); assert.equal(com.body.errors.length, 1);
+  // traspaso: usuario del centro 1 lo pide; usuario del centro 2 lo acepta
+  const roles = (await admin.call('GET', '/admin/roles')).body.roles;
+  const editor = roles.find((r) => r.name === 'Editor');
+  await admin.call('POST', '/admin/users', { name: 'Orig', email: 'orig@test.com', password: 'origpass123', must_change_password: false, assignments: [{ company_id: ids.company, center_id: ids.c1, role_id: editor.id }] });
+  await admin.call('POST', '/admin/users', { name: 'Dest', email: 'dest@test.com', password: 'destpass123', must_change_password: false, assignments: [{ company_id: ids.company, center_id: ids.c2, role_id: editor.id }] });
+  const orig = client(); await orig.login('orig@test.com', 'origpass123');
+  const dest = client(); await dest.login('dest@test.com', 'destpass123');
+  // cambiar el centro editando no vale: hay que traspasar
+  assert.equal((await orig.call('PUT', `/apps/vehiculos/records/${v.id}`, { center_id: ids.c2, data: {} })).status, 400);
+  assert.ok((await orig.call('GET', '/apps/vehiculos/transfer-centers')).body.some((c) => c.id === ids.c2), 've los centros de destino aunque no tenga acceso');
+  const t = await orig.call('POST', `/apps/vehiculos/records/${v.id}/transfer`, { to_center: ids.c2, note: 'Lo lleva Juan el lunes' });
+  assert.equal(t.status, 201);
+  assert.equal((await orig.call('POST', `/apps/vehiculos/records/${v.id}/transfer`, { to_center: ids.c2 })).status, 409, 'solo uno pendiente');
+  assert.equal((await orig.call('GET', `/apps/vehiculos/records/${v.id}`)).body.transfer_to, ids.c2);
+  // bandejas
+  assert.equal((await dest.call('GET', '/apps/_transfers/pending')).body.incoming.length, 1);
+  assert.equal((await orig.call('GET', '/apps/_transfers/pending')).body.outgoing.length, 1);
+  // el origen no puede aceptar; el destino sí
+  assert.equal((await orig.call('POST', `/apps/vehiculos/transfers/${t.body.id}/accept`, {})).status, 403);
+  assert.equal((await dest.call('POST', `/apps/vehiculos/transfers/${t.body.id}/accept`, { note: 'Recibido' })).status, 200);
+  const after = (await admin.call('GET', `/apps/vehiculos/records/${v.id}`)).body;
+  assert.equal(after.center_id, ids.c2); assert.ok(!after.transfer_to);
+  assert.equal((await admin.call('GET', `/apps/vehiculos_revisiones/records/${r1.body.id}`)).body.center_id, ids.c2, 'las revisiones le siguen');
+  assert.equal((await orig.call('GET', `/apps/vehiculos/records/${v.id}`)).status, 403, 'el origen ya no lo ve');
+  assert.equal((await dest.call('GET', `/apps/vehiculos/records/${v.id}`)).status, 200);
+  // rechazar y anular
+  const t2 = (await dest.call('POST', `/apps/vehiculos/records/${v.id}/transfer`, { to_center: ids.c1 })).body;
+  assert.equal((await orig.call('POST', `/apps/vehiculos/transfers/${t2.id}/reject`, { note: 'No tenemos sitio' })).status, 200);
+  const t3 = (await dest.call('POST', `/apps/vehiculos/records/${v.id}/transfer`, { to_center: ids.c1 })).body;
+  assert.equal((await dest.call('POST', `/apps/vehiculos/transfers/${t3.id}/cancel`, {})).status, 200);
+  const hist = (await dest.call('GET', `/apps/vehiculos/records/${v.id}/transfers`)).body;
+  assert.deepEqual(hist.map((x) => x.status), ['cancelled', 'rejected', 'accepted']);
+  assert.equal(hist[2].note, 'Lo lleva Juan el lunes');
+  // estructura: exportar e importar en otra clave (como en otra instalación)
+  const ex = (await admin.call('GET', `/admin/apps/${veh.id}/structure`)).body;
+  assert.equal(ex.format, 'erp-app-structure');
+  assert.equal(ex.app.children.length, 2);
+  assert.ok(ex.app.reports.length >= 2);
+  const copy = JSON.parse(JSON.stringify(ex));
+  copy.app.key = 'flota2'; copy.app.name = 'Flota 2';
+  copy.app.children.forEach((c) => { c.key = c.key.replace('vehiculos', 'flota2'); });
+  assert.equal((await admin.call('POST', '/admin/structure', { structure: copy, dry_run: true })).body.exists, false);
+  const imp = await admin.call('POST', '/admin/structure', { structure: copy });
+  assert.equal(imp.status, 200);
+  assert.deepEqual(imp.body.apps_created, ['Flota 2', 'Revisiones', 'Siniestros']);
+  const apps2 = (await admin.call('GET', '/admin/apps')).body;
+  const f2 = apps2.find((a) => a.key === 'flota2');
+  assert.equal(f2.fields.length, veh.fields.filter((f) => f.active).length);
+  assert.equal(apps2.find((a) => a.key === 'flota2_revisiones').parent_app_id, f2.id);
+  // reimportar no duplica ni borra
+  const again = (await admin.call('POST', '/admin/structure', { structure: copy })).body;
+  assert.equal(again.apps_created.length, 0); assert.equal(again.fields_added, 0); assert.equal(again.reports_added, 0);
+  assert.equal((await admin.call('POST', '/admin/structure', { structure: { format: 'otra' } })).status, 400);
+});

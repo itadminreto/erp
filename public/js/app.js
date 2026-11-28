@@ -4,6 +4,7 @@ import { startA11y, getPrefs, setPrefs } from './a11y.js';
 import { renderApp } from './records.js';
 import { renderVoice } from './voice.js';
 import { renderSystemPanel } from './system.js';
+import { renderTransfers, transfersHomeCard } from './transfers.js';
 import { renderCompanies, renderCenters, renderWorkGroups, renderUsers, renderRoles, renderAppsAdmin, renderSettings, renderAudit, renderFormDesigner } from './admin.js';
 
 const root = document.getElementById('root');
@@ -90,6 +91,8 @@ function toggleTheme() {
 
 async function refreshApps() {
   try { state.apps = await api('/apps'); } catch (e) { toastErr(e); state.apps = []; }
+  // traspasos pendientes (si alguna app los usa)
+  state.transfers = state.apps.some((a) => a.transfers) ? await api('/apps/_transfers/pending').catch(() => null) : null;
   drawNav();
 }
 
@@ -104,6 +107,7 @@ function drawNav() {
   clear(nav,
     link('#/', '🏠', 'Inicio'),
     voiceApps().length ? [h('div.section', { role: 'heading', 'aria-level': '2' }, 'Asistente por voz'), voiceApps().map((a) => link('#/voz/' + a.key, '📞', `Recoger · ${a.name}`))] : null,
+    state.transfers ? link('#/traspasos', '⇄', 'Traspasos', state.transfers.incoming.length || null) : null,
     state.apps.length ? h('div.section', { role: 'heading', 'aria-level': '2' }, 'Aplicaciones') : null,
     state.apps.map((a) => link('#/app/' + a.key, a.icon || '📁', a.name, a.count, a.color)),
     state.me.is_superadmin ? [h('div.section', { role: 'heading', 'aria-level': '2' }, 'Super admin'),
@@ -130,6 +134,7 @@ async function routeInner() {
   try {
     if (a === 'app' && b) return await renderApp(content, b, refreshApps);
     if (a === 'voz' && b) return await renderVoice(content, b);
+    if (a === 'traspasos') return await renderTransfers(content, refreshApps);
     if (a === 'admin' && state.me.is_superadmin) {
       const refreshAll = async () => { state.me = await api('/me'); buildShell(); await refreshApps(); route(); };
       const views = { companies: () => renderCompanies(content, refreshAll), centers: () => renderCenters(content), groups: () => renderWorkGroups(content), users: () => renderUsers(content), roles: () => renderRoles(content),
@@ -150,6 +155,7 @@ function renderHome() {
   const company = state.me.companies.find((c) => c.id === state.companyId);
   clear(content,
     h('div.page-head', h('div.title', h('div', h('h1', `Hola, ${state.me.name.split(' ')[0]}`), h('div.muted', company ? company.name : 'Sin empresa asignada')))),
+    transfersHomeCard(state.transfers, async () => { await refreshApps(); renderHome(); }),
     state.me.is_superadmin ? h('div.sys-panel', { id: 'sys-panel' }) : null,
     voiceApps().length ? h('div.row', { style: { marginBottom: '16px' } }, voiceApps().map((a) => h('a.btn.primary.voice-start', { href: '#/voz/' + a.key }, `📞 Recoger ${a.name.toLowerCase()} por voz`))) : null,
     state.apps.length ? h('div.grid-cards', state.apps.map((a) => h('a.card.app-card', { href: '#/app/' + a.key },

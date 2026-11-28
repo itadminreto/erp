@@ -102,6 +102,19 @@ Guarda también `APP_SECRET` o `data/secret.key`.
 | **Responsive e intuitivo** | Menú lateral plegable, tablas que pasan a tarjetas en móvil, formularios a pantalla completa en móvil, tema claro/oscuro. |
 | **Datos generales (super admin)** | Empresas, centros, usuarios, roles, aplicaciones/campos y ajustes (nombre, URL pública, SMTP). |
 
+## Vehículos: subapartados, centros de coste y traspasos
+
+- **Subapartados**: una app puede tener apps hijas (Vehículos → Revisiones, Siniestros). Se ven como pestañas en la ficha
+  del vehículo y como subpestañas en la lista; usan los permisos y el centro de su vehículo. Se crean en
+  **Apps y campos → ＋ Subapartado**. Se pueden importar desde Excel indicando la matrícula (o el Nº) del vehículo.
+- **Centros de coste**: en Propiedades de la app, «Centros que usa» (Vehículos: solo centros de coste).
+- **Traspasos** (Propiedades → «Traspasos entre centros»): el centro de origen pulsa **⇄ Traspasar** en la ficha;
+  el de destino lo ve en **Inicio** y en el menú **⇄ Traspasos** y lo **acepta** o **rechaza** (el origen puede anularlo).
+  Al aceptarlo, el vehículo pasa al nuevo centro con sus revisiones y siniestros. Historial en la pestaña «⇄ Traspasos».
+- **Estructura exportable**: **⬇ Exportar estructura** (app + subapartados + campos + diseño + listas + informes, sin datos)
+  y **⬆ Importar estructura** en otra instalación (crea o completa; nunca borra). Plantilla de Vehículos en
+  `deploy/plantillas/estructura-vehiculos.json` (recoge los datos del antiguo programa Delphi).
+
 ## Panel del sistema (inicio del super admin)
 
 Tarjetas que se actualizan cada 30 s y se pueden ocultar u ordenar (**⚙ Personalizar**): **base de datos** (tamaño,

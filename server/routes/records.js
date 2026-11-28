@@ -63,7 +63,10 @@ const companyUsers = (req) => all(`SELECT DISTINCT u.id, u.name, u.email, u.phon
 const closedValues = (app) => { try { const v = JSON.parse(app.closed_values || '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
 const companyCenters = (companyId) => all('SELECT id, code, name, kind FROM centers WHERE company_id = ? AND deleted_at IS NULL AND active = 1 ORDER BY code, name', companyId);
 /** Centros que el usuario puede ver en esta app (los de sus asignaciones; todos si tiene acceso a toda la empresa). */
-const visibleCenters = async (req) => (await companyCenters(req.companyId)).filter((c) => can(req.grants, 'view', req.user, { center_id: c.id }));
+/** ¿El centro es del tipo que usa la app? (p. ej. Vehículos solo en centros de coste: «coste» o «ambos»). */
+const kindOk = (app, c) => !app.center_kind || c.kind === app.center_kind || c.kind === 'ambos';
+const visibleCenters = async (req) => (await companyCenters(req.companyId))
+  .filter((c) => kindOk(req.parentApp || req.appDef, c) && can(req.grants, 'view', req.user, { center_id: c.id }));
 
 /** Carga la app, sus campos y los permisos del usuario en la empresa activa. */
 router.param('appKey', async (req, res, next, key) => {
@@ -73,14 +76,18 @@ router.param('appKey', async (req, res, next, key) => {
     if (!req.companyId) return res.status(403).json({ error: 'No tienes ninguna empresa asignada' });
     req.appDef = app;
     req.fields = await appFields(app.id);
-    req.grants = await grantsFor(req.user, req.companyId, app.id);
+    // un subapartado (p. ej. Revisiones de Vehículos) usa los permisos de su app padre
+    if (app.parent_app_id) req.parentApp = await get('SELECT * FROM apps WHERE id = ?', app.parent_app_id);
+    req.grants = await grantsFor(req.user, req.companyId, req.parentApp ? req.parentApp.id : app.id);
     if (!req.grants.view.length) return res.status(403).json({ error: 'Sin acceso a esta aplicación' });
   } catch (e) { return next(e); }
   next();
 });
 
-const SELECT_REC = `SELECT r.*, c.name center_name, c.code center_code, uc.name created_by_name, uu.name updated_by_name, ud.name deleted_by_name
-  FROM records r LEFT JOIN centers c ON c.id = r.center_id
+const SELECT_REC = `SELECT r.*, c.name center_name, c.code center_code, uc.name created_by_name, uu.name updated_by_name, ud.name deleted_by_name,
+  p.number parent_number, p.data parent_data,
+  (SELECT t.to_center FROM record_transfers t WHERE t.record_id = r.id AND t.status = 'pending' LIMIT 1) transfer_to
+  FROM records r LEFT JOIN centers c ON c.id = r.center_id LEFT JOIN records p ON p.id = r.parent_id
   LEFT JOIN users uc ON uc.id = r.created_by LEFT JOIN users uu ON uu.id = r.updated_by LEFT JOIN users ud ON ud.id = r.deleted_by`;
 
 async function getRecord(req, id) {
@@ -91,6 +98,11 @@ async function getRecord(req, id) {
   return r;
 }
 
+/** Título del registro padre (p. ej. la matrícula del vehículo) para mostrarlo en el subapartado. */
+function parentTitle(req, r) {
+  if (!req.parentApp || !r.parent_data) return '';
+  try { return String(JSON.parse(r.parent_data)[req.parentApp.title_field] ?? ''); } catch { return ''; }
+}
 function serialize(req, r, full = true) {
   const data = JSON.parse(r.data || '{}');
   const out = {};
@@ -105,6 +117,8 @@ function serialize(req, r, full = true) {
   return {
     id: r.id, number: r.number, center_id: r.center_id, center_name: r.center_name, center_code: r.center_code,
     data: out,
+    ...(r.parent_id ? { parent_id: r.parent_id, parent_number: r.parent_number, parent_title: parentTitle(req, r) } : {}),
+    ...(r.transfer_to ? { transfer_to: r.transfer_to } : {}),
     created_at: r.created_at, updated_at: r.updated_at, created_by_name: r.created_by_name, updated_by_name: r.updated_by_name,
     deleted_at: r.deleted_at, deleted_by_name: r.deleted_by_name,
     can: {
@@ -179,9 +193,9 @@ async function checkUnique(req, data, exceptId = 0) {
 }
 
 async function checkCenter(req, centerId, perm) {
-  if (centerId !== null && !(await get('SELECT id FROM centers WHERE id = ? AND company_id = ? AND deleted_at IS NULL', centerId, req.companyId))) {
-    throw httpError(400, 'Centro no válido para la empresa activa');
-  }
+  const c = centerId !== null ? await get('SELECT id, kind FROM centers WHERE id = ? AND company_id = ? AND deleted_at IS NULL', centerId, req.companyId) : null;
+  if (centerId !== null && !c) throw httpError(400, 'Centro no válido para la empresa activa');
+  if (c && !kindOk(req.appDef, c)) throw httpError(400, `En ${req.appDef.name} el centro tiene que ser de ${req.appDef.center_kind === 'coste' ? 'coste' : 'trabajo'}`);
   if (!can(req.grants, perm, req.user, { center_id: centerId })) {
     throw httpError(403, centerId === null ? 'Debes indicar un centro' : 'Sin permiso en ese centro');
   }
@@ -216,7 +230,7 @@ router.get('/', wrap(async (req, res) => {
   if (!req.companyId) return res.json([]);
   const apps = await all('SELECT * FROM apps WHERE active = 1 ORDER BY sort, name');
   const out = [];
-  for (const a of apps) {
+  for (const a of apps.filter((x) => !x.parent_app_id)) {
     const g = await grantsFor(req.user, req.companyId, a.id);
     if (!g.view.length) continue;
     const f = sqlFilter(g, 'view', req.user);
@@ -242,6 +256,38 @@ router.get('/', wrap(async (req, res) => {
 }));
 
 // informes guardados de la app (los define el super admin)
+// ---------- traspasos: consulta común ----------
+const transferSelect = `SELECT t.*, a.\`key\` app_key, a.name app_name, a.icon app_icon, a.title_field, r.number, r.data rec_data, r.center_id rec_center,
+    co.name from_name, co.code from_code, cd.name to_name, cd.code to_code, ur.name requested_by_name, us.name resolved_by_name
+  FROM record_transfers t JOIN apps a ON a.id = t.app_id JOIN records r ON r.id = t.record_id
+  LEFT JOIN centers co ON co.id = t.from_center LEFT JOIN centers cd ON cd.id = t.to_center
+  LEFT JOIN users ur ON ur.id = t.requested_by LEFT JOIN users us ON us.id = t.resolved_by`;
+const transferOut = (t) => {
+  let title = '';
+  try { title = String(JSON.parse(t.rec_data)[t.title_field] ?? ''); } catch { /* sin datos */ }
+  const { rec_data, title_field, ...rest } = t;
+  return { ...rest, title };
+};
+/**
+ * Traspasos pendientes del usuario en todas las apps: «incoming» = puedo aceptarlos (soy del centro de destino),
+ * «outgoing» = los ha pedido mi centro y esperan respuesta. Para el menú principal y el inicio.
+ */
+router.get('/_transfers/pending', wrap(async (req, res) => {
+  const out = { incoming: [], outgoing: [] };
+  if (!req.companyId) return res.json(out);
+  const apps = await all('SELECT * FROM apps WHERE active = 1 AND transfers = 1 AND parent_app_id IS NULL');
+  for (const a of apps) {
+    const g = await grantsFor(req.user, req.companyId, a.id);
+    if (!g.view.length) continue;
+    const list = (await all(`${transferSelect} WHERE t.app_id = ? AND t.company_id = ? AND t.status = 'pending' ORDER BY t.id`, a.id, req.companyId)).map(transferOut);
+    for (const t of list) {
+      if (can(g, 'edit', req.user, { center_id: t.to_center })) out.incoming.push(t);
+      else if (t.requested_by === req.user.id || can(g, 'edit', req.user, { center_id: t.from_center })) out.outgoing.push(t);
+    }
+  }
+  res.json(out);
+}));
+
 router.get('/:appKey/reports', wrap(async (req, res) => {
   const rows = await all('SELECT id, name, config FROM app_reports WHERE app_id = ? AND deleted_at IS NULL ORDER BY sort, name', req.appDef.id);
   res.json(rows.map((r) => ({ ...r, config: JSON.parse(r.config) })));
@@ -257,6 +303,10 @@ router.get('/:appKey', wrap(async (req, res) => {
   }));
   res.json({
     app: req.appDef, fields: req.fields, perms: summary(req.grants),
+    // subapartados (Revisiones, Siniestros… dentro de Vehículos) y app padre
+    children: await all('SELECT id, `key`, name, icon, color, title_field FROM apps WHERE parent_app_id = ? AND active = 1 ORDER BY sort, name', req.appDef.id),
+    siblings: req.parentApp ? await all('SELECT id, `key`, name, icon FROM apps WHERE parent_app_id = ? AND active = 1 ORDER BY sort, name', req.parentApp.id) : [],
+    parent_app: req.parentApp ? { id: req.parentApp.id, key: req.parentApp.key, name: req.parentApp.name, icon: req.parentApp.icon, title_field: req.parentApp.title_field } : null,
     can_create_without_center: can(req.grants, 'create', req.user, { center_id: null }),
     can_view_without_center: can(req.grants, 'view', req.user, { center_id: null }),
     centers, users: await companyUsers(req), layouts, closed_values: closedValues(req.appDef),
@@ -328,6 +378,7 @@ async function listQuery(req, q) {
     where.push(dueF.length ? `(${dueF.map((f) => `${jv(f.key)} < CURDATE()`).join(' OR ')})` : '0');
   }
   // «míos»: el campo responsable soy yo o está asignado a uno de mis grupos de trabajo
+  if (q.parent) { where.push('r.parent_id = ?'); params.push(Number(q.parent) || 0); }
   if (q.mine === '1') {
     const mc = await mineCondition(req.appDef, req.fields, req.user);
     if (mc) { where.push(mc.sql); params.push(...mc.params); }
@@ -418,10 +469,10 @@ async function storeImages(req, recId, data) {
   return data;
 }
 
-async function insertRecord(req, centerId, data, summaryText) {
+async function insertRecord(req, centerId, data, summaryText, parentId = null) {
   const number = await nextNumber(req.appDef.id, req.companyId);
-  const id = Number((await run(`INSERT INTO records (app_id, company_id, number, center_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
-    req.appDef.id, req.companyId, number, centerId, JSON.stringify(data), req.user.id, req.user.id)).lastInsertRowid);
+  const id = Number((await run(`INSERT INTO records (app_id, company_id, number, center_id, parent_id, data, created_by, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
+    req.appDef.id, req.companyId, number, centerId, parentId, JSON.stringify(data), req.user.id, req.user.id)).lastInsertRowid);
   await storeImages(req, id, data);
   await audit(req, { entity: 'record', entityId: id, action: 'create', appId: req.appDef.id, companyId: req.companyId,
     summary: `${summaryText} · Nº ${number}`, changes: diff({}, { ...auditView(req, data), _centro: centerId }, pwKeysOf(req)) });
@@ -438,16 +489,42 @@ async function updateRecord(req, rec, centerId, data, summaryText) {
   return true;
 }
 
+/** Busca el registro padre por Nº o por su campo título, sin distinguir espacios, guiones ni mayúsculas (0225 HNK = 0225-hnk). */
+async function findParent(req, ref) {
+  const v = String(ref ?? '').trim();
+  if (!v) throw new Error(`falta ${req.parentApp.name}`);
+  const tf = req.parentApp.title_field;
+  const compact = v.toUpperCase().replace(/[\s.\-]/g, '');
+  const p = (tf && KEY_RE.test(tf) ? await get(`SELECT * FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL
+      AND REPLACE(REPLACE(REPLACE(UPPER(JSON_VALUE(data, '$.${tf}')), ' ', ''), '-', ''), '.', '') = ? ORDER BY id DESC LIMIT 1`, req.parentApp.id, req.companyId, compact) : null)
+    || (/^\d+$/.test(v) ? await get('SELECT * FROM records WHERE app_id = ? AND company_id = ? AND deleted_at IS NULL AND number = ?', req.parentApp.id, req.companyId, Number(v)) : null);
+  if (!p) throw new Error(`${req.parentApp.name} «${v}» no encontrado`);
+  if (!can(req.grants, 'view', req.user, p)) throw new Error(`sin permiso sobre ${req.parentApp.name} «${v}»`);
+  return { ...p, title: v };
+}
+/** Registro padre de un subapartado (debe existir, ser de la empresa y poder verse). */
+async function parentRecord(req, id) {
+  const p = await get('SELECT * FROM records WHERE id = ? AND app_id = ? AND company_id = ? AND deleted_at IS NULL', Number(id) || 0, req.parentApp.id, req.companyId);
+  if (!p) throw httpError(400, `Indica a qué registro de ${req.parentApp.name} pertenece`);
+  if (!can(req.grants, 'view', req.user, p)) throw httpError(403, 'Sin permiso sobre ese registro');
+  return p;
+}
 router.post('/:appKey/records', wrap(async (req, res) => {
   const body = req.body || {};
-  const centerId = body.center_id ? Number(body.center_id) : null;
-  await checkCenter(req, centerId, 'create');
+  let centerId = body.center_id ? Number(body.center_id) : null;
+  let parentId = null;
+  if (req.parentApp) {
+    // subapartado: va con el registro padre y en su mismo centro
+    const p = await parentRecord(req, body.parent_id);
+    parentId = p.id; centerId = p.center_id;
+    if (!can(req.grants, 'create', req.user, { center_id: centerId, created_by: p.created_by })) throw httpError(403, 'Sin permiso para añadir en ese centro');
+  } else await checkCenter(req, centerId, 'create');
   const groups = await companyGroups(req.companyId);
   const data = buildData(req, body.data || {}, {}, { users: await activeUsers(), groups, centerId });
   checkGroups(req, data, centerId, groups);
   const id = await tx(async () => {
     await checkUnique(req, data);
-    return insertRecord(req, centerId, data, `Alta en ${req.appDef.name}`);
+    return insertRecord(req, centerId, data, `Alta en ${req.appDef.name}`, parentId);
   });
   res.status(201).json(serialize(req, await getRecord(req, id)));
 }));
@@ -458,9 +535,13 @@ router.put('/:appKey/records/:id', wrap(async (req, res) => {
   if (!can(req.grants, 'edit', req.user, rec)) throw httpError(403, 'Sin permiso de edición');
   const body = req.body || {};
   let centerId = rec.center_id;
-  if ('center_id' in body) {
+  if ('center_id' in body && !req.parentApp) { // el centro de un subapartado es siempre el de su registro padre
     centerId = body.center_id ? Number(body.center_id) : null;
-    if (centerId !== rec.center_id) await checkCenter(req, centerId, 'edit');
+    if (centerId !== rec.center_id) {
+      // con traspasos activados, el cambio de centro se hace con un traspaso (lo acepta el centro de destino)
+      if (req.appDef.transfers && rec.center_id && !req.user.is_superadmin) throw httpError(400, 'Para cambiar de centro usa «Traspasar»: el centro de destino tiene que aceptarlo');
+      await checkCenter(req, centerId, 'edit');
+    }
   }
   const groups = await companyGroups(req.companyId);
   const data = buildData(req, body.data || {}, JSON.parse(rec.data), { users: await activeUsers(), groups, centerId });
@@ -468,8 +549,63 @@ router.put('/:appKey/records/:id', wrap(async (req, res) => {
   await tx(async () => {
     await checkUnique(req, data, rec.id);
     await updateRecord(req, rec, centerId, data);
+    if (centerId !== rec.center_id) await run('UPDATE records SET center_id = ? WHERE parent_id = ?', centerId, rec.id); // sus subapartados le siguen
   });
   res.json(serialize(req, await getRecord(req, rec.id)));
+}));
+
+// ---------- traspasos entre centros (los solicita el centro de origen y los acepta el de destino) ----------
+/** Centros de destino posibles: todos los de la empresa del tipo que usa la app (no hace falta poder verlos). */
+router.get('/:appKey/transfer-centers', wrap(async (req, res) => {
+  res.json((await companyCenters(req.companyId)).filter((c) => kindOk(req.appDef, c)));
+}));
+router.get('/:appKey/records/:id/transfers', wrap(async (req, res) => {
+  const rec = await getRecord(req, req.params.id);
+  res.json((await all(`${transferSelect} WHERE t.record_id = ? ORDER BY t.id DESC`, rec.id)).map(transferOut));
+}));
+router.post('/:appKey/records/:id/transfer', wrap(async (req, res) => {
+  if (!req.appDef.transfers) throw httpError(400, 'Esta aplicación no tiene traspasos');
+  const rec = await getRecord(req, req.params.id);
+  if (rec.deleted_at) throw httpError(400, 'El registro está en la papelera');
+  if (!can(req.grants, 'edit', req.user, rec)) throw httpError(403, 'Solo el centro de origen (con permiso de edición) puede traspasar');
+  const to = Number((req.body || {}).to_center) || 0;
+  const dest = await get('SELECT * FROM centers WHERE id = ? AND company_id = ? AND deleted_at IS NULL AND active = 1', to, req.companyId);
+  if (!dest || !kindOk(req.appDef, dest)) throw httpError(400, 'Centro de destino no válido');
+  if (dest.id === rec.center_id) throw httpError(400, 'Ya está en ese centro');
+  if (await get("SELECT id FROM record_transfers WHERE record_id = ? AND status = 'pending'", rec.id)) throw httpError(409, 'Ya tiene un traspaso pendiente de aceptar');
+  const note = String((req.body || {}).note || '').trim().slice(0, 1000);
+  const id = Number((await run(`INSERT INTO record_transfers (app_id, company_id, record_id, from_center, to_center, note, requested_by, requested_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP())`,
+    req.appDef.id, req.companyId, rec.id, rec.center_id, dest.id, note, req.user.id)).lastInsertRowid);
+  await audit(req, { entity: 'record', entityId: rec.id, action: 'transfer', appId: req.appDef.id, companyId: req.companyId,
+    summary: `Traspaso solicitado: Nº ${rec.number} de ${rec.center_name || 'sin centro'} a ${dest.name}${note ? ` (${note})` : ''}` });
+  res.status(201).json(transferOut(await get(`${transferSelect} WHERE t.id = ?`, id)));
+}));
+/** Aceptar / rechazar (centro de destino) o anular (centro de origen). */
+router.post('/:appKey/transfers/:tid/:action(accept|reject|cancel)', wrap(async (req, res) => {
+  const t = await get("SELECT * FROM record_transfers WHERE id = ? AND app_id = ? AND company_id = ? AND status = 'pending'", Number(req.params.tid), req.appDef.id, req.companyId);
+  if (!t) throw httpError(404, 'El traspaso ya no está pendiente');
+  const rec = await get(`${SELECT_REC} WHERE r.id = ?`, t.record_id);
+  const action = req.params.action;
+  const response = String((req.body || {}).note || '').trim().slice(0, 1000);
+  if (action === 'cancel') {
+    if (!(t.requested_by === req.user.id || can(req.grants, 'edit', req.user, { center_id: t.from_center }))) throw httpError(403, 'Solo el centro de origen puede anularlo');
+  } else if (!can(req.grants, 'edit', req.user, { center_id: t.to_center })) {
+    throw httpError(403, 'Solo el centro de destino puede aceptarlo o rechazarlo');
+  }
+  const dest = await get('SELECT name FROM centers WHERE id = ?', t.to_center);
+  await tx(async () => {
+    const status = { accept: 'accepted', reject: 'rejected', cancel: 'cancelled' }[action];
+    await run('UPDATE record_transfers SET status = ?, response = ?, resolved_by = ?, resolved_at = UTC_TIMESTAMP() WHERE id = ?', status, response, req.user.id, t.id);
+    if (action === 'accept') {
+      await run('UPDATE records SET center_id = ?, updated_by = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?', t.to_center, req.user.id, t.record_id);
+      await run('UPDATE records SET center_id = ? WHERE parent_id = ?', t.to_center, t.record_id); // y sus subapartados
+    }
+    const verb = { accept: 'aceptado', reject: 'rechazado', cancel: 'anulado' }[action];
+    await audit(req, { entity: 'record', entityId: t.record_id, action: 'transfer', appId: req.appDef.id, companyId: req.companyId,
+      summary: `Traspaso ${verb}: Nº ${rec.number} de ${rec.center_name || 'sin centro'} a ${dest ? dest.name : '?'}${response ? ` (${response})` : ''}`,
+      changes: action === 'accept' ? [{ field: '_centro', from: t.from_center ?? '', to: t.to_center }] : [] });
+  });
+  res.json({ ok: true });
 }));
 
 // ---------- papelera ----------
@@ -651,11 +787,11 @@ router.get('/:appKey/export', wrap(async (req, res) => {
   const users = Object.fromEntries((await activeUsers()).map((u) => [u.id, u]));
   const groups = await groupsMap(req.companyId);
   const fields = req.fields.filter((f) => f.type !== 'password' || withPw);
-  const header = ['Nº', 'Centro', ...fields.map((f) => f.label), 'Creado', 'Modificado', 'Estado'];
+  const header = ['Nº', ...(req.parentApp ? [req.parentApp.name] : []), 'Centro', ...fields.map((f) => f.label), 'Creado', 'Modificado', 'Estado'];
   const matrix = rows.map((r) => {
     const d = JSON.parse(r.data);
     const rowCanPw = withPw && can(req.grants, 'view_passwords', req.user, r);
-    return [r.number, r.center_code || r.center_name || '',
+    return [r.number, ...(req.parentApp ? [parentTitle(req, r) || (r.parent_number ? `Nº ${r.parent_number}` : '')] : []), r.center_code || r.center_name || '',
       ...fields.map((f) => (f.type === 'password' ? (rowCanPw ? decrypt(d[f.key]) : '') : toText(f, d[f.key], users, groups))),
       r.created_at, r.updated_at, r.deleted_at ? 'BORRADO' : 'Activo'];
   });
@@ -708,12 +844,14 @@ router.post('/:appKey/import/preview', upload.single('file'), wrap(async (req, r
   if (matrix.length < 2) throw httpError(400, 'El fichero no contiene datos (se espera una fila de cabecera y al menos una fila)');
   const header = matrix[0].map((h) => String(h).trim());
   const rows = matrix.slice(1);
-  const targets = [{ key: '_id', label: 'Nº (actualizar existente)' }, { key: '_center', label: 'Centro (código o nombre)' },
+  const targets = [{ key: '_id', label: 'Nº (actualizar existente)' },
+    ...(req.parentApp ? [{ key: '_parent', label: `${req.parentApp.name} (Nº o ${req.parentApp.title_field})` }] : [{ key: '_center', label: 'Centro (código o nombre)' }]),
     ...req.fields.filter((f) => !['signature', 'image'].includes(f.type)).map((f) => ({ key: f.key, label: f.label, type: f.type }))];
   const mapping = header.map((h) => {
     const n = norm(h);
     if (['id', 'n', 'no', 'numero', 'num', 'nparte', 'numerodetrabajo', 'ntrabajo'].includes(n)) return '_id';
-    if (['centro', 'center', 'centrodetrabajo', 'centrodecoste', 'cc'].includes(n)) return '_center';
+    if (req.parentApp && [norm(req.parentApp.name), norm(req.parentApp.title_field), norm(req.parentApp.key), 'mat', 'matricula'].includes(n)) return '_parent';
+    if (!req.parentApp && ['centro', 'center', 'centrodetrabajo', 'centrodecoste', 'cc'].includes(n)) return '_center';
     const f = req.fields.find((x) => norm(x.label) === n || norm(x.key) === n);
     return f ? f.key : '';
   });
@@ -748,12 +886,13 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
         const row = p.rows[i];
         await run(`SAVEPOINT fila`);
         try {
-          const input = {}; let centerId; let recId = null;
+          const input = {}; let centerId; let recId = null; let parentRef;
           mapping.forEach((target, col) => {
             if (!target) return;
             const v = row[col];
             if (target === '_id') { if (String(v).trim()) recId = Number(v); }
             else if (target === '_center') centerId = findCenter(v);
+            else if (target === '_parent') parentRef = v;
             else input[target] = v ?? '';
           });
           let existing = null;
@@ -772,6 +911,14 @@ router.post('/:appKey/import/commit', wrap(async (req, res) => {
             await checkUnique(req, data, existing.id);
             if (await updateRecord(req, existing, newCenter, data, 'Modificación por importación')) result.updated++;
             else result.skipped++;
+          } else if (req.parentApp) {
+            // subapartado: se cuelga del registro padre (por Nº o por su campo título, p. ej. la matrícula)
+            const p = await findParent(req, parentRef);
+            if (!can(req.grants, 'create', req.user, { center_id: p.center_id })) throw new Error('sin permiso en el centro de ' + (p.title || 'ese registro'));
+            const data = buildData(req, input, {}, { users, groups, centerId: p.center_id });
+            await checkUnique(req, data);
+            await insertRecord(req, p.center_id, data, 'Alta por importación', p.id);
+            result.created++;
           } else {
             const cId = centerId === undefined ? (default_center ? Number(default_center) : null) : centerId;
             await checkCenter(req, cId, 'create');

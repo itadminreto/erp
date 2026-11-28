@@ -1,0 +1,933 @@
+{
+  "format": "erp-app-structure",
+  "version": 1,
+  "app": {
+    "key": "vehiculos",
+    "name": "Vehículos",
+    "icon": "🚐",
+    "color": "#ef4444",
+    "description": "Flota por centro de coste: ITV, seguros, tarjetas, revisiones, siniestros y traspasos",
+    "title_field": "matricula",
+    "status_field": "estado",
+    "closed_values": [
+      "Baja"
+    ],
+    "transfers": 1,
+    "center_kind": "coste",
+    "form_layout": {
+      "tabs": false,
+      "items": [
+        {
+          "section": "Identificación"
+        },
+        "matricula",
+        "marca",
+        "modelo",
+        "tipo",
+        "bastidor",
+        "titular",
+        "fecha_matriculacion",
+        "tara",
+        "pma",
+        {
+          "section": "Estado y ubicación"
+        },
+        "estado",
+        "ubicacion",
+        "fecha_asignacion",
+        "km",
+        "conductor",
+        {
+          "section": "Compra"
+        },
+        "procedencia",
+        "fecha_compra",
+        "valor_compra",
+        "fecha_alta",
+        {
+          "section": "Seguro"
+        },
+        "seguro_compania",
+        "seguro_poliza",
+        "seguro_importe",
+        "seguro_alta",
+        "seguro_vencimiento",
+        "seguro_baja",
+        "seguro_motivo_baja",
+        {
+          "section": "Tarjeta de transporte"
+        },
+        "tarjeta_transporte",
+        "tarjeta_ambito",
+        "tarjeta_alta",
+        "tarjeta_vencimiento",
+        "tarjeta_baja",
+        "tarjeta_motivo_baja",
+        {
+          "section": "ITV y combustible"
+        },
+        "itv_proxima",
+        "tarjeta_combustible",
+        "pin_tarjeta",
+        {
+          "section": "Baja"
+        },
+        "fecha_baja",
+        "motivo_baja",
+        "observaciones"
+      ]
+    },
+    "fields": [
+      {
+        "key": "matricula",
+        "label": "Matrícula",
+        "type": "text",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 1,
+        "unique_value": 1,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "marca",
+        "label": "Marca",
+        "type": "text",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "modelo",
+        "label": "Modelo",
+        "type": "text",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "tipo",
+        "label": "Tipo de vehículo",
+        "type": "select",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "choices": [
+            "Turismo",
+            "Furgoneta",
+            "Vehículo ligero",
+            "Vehículo pesado",
+            "Camión",
+            "Autobús",
+            "Motocicleta",
+            "Ciclomotor",
+            "Cuadriciclo",
+            "Todo terreno",
+            "Cabeza tractora",
+            "Tractor",
+            "Remolque",
+            "Semirremolque",
+            "Portacontenedores",
+            "Matrimonios Cantabria"
+          ]
+        }
+      },
+      {
+        "key": "bastidor",
+        "label": "Nº bastidor",
+        "type": "text",
+        "width": "md",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "titular",
+        "label": "Titular",
+        "type": "select",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "choices": [
+            "Asociación",
+            "Cooperativa",
+            "Particular"
+          ]
+        }
+      },
+      {
+        "key": "fecha_matriculacion",
+        "label": "Fecha matriculación",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "tara",
+        "label": "Tara (kg)",
+        "type": "number",
+        "width": "xs",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "pma",
+        "label": "PMA (kg)",
+        "type": "number",
+        "width": "xs",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "estado",
+        "label": "Estado",
+        "type": "select",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "choices": [
+            "Activo",
+            "En venta",
+            "Baja"
+          ]
+        }
+      },
+      {
+        "key": "ubicacion",
+        "label": "Ubicación",
+        "type": "select",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "choices": [
+            "Adarzo",
+            "Avilés",
+            "Bezana",
+            "Compra-venta",
+            "Castellón",
+            "Cianca",
+            "Clásico",
+            "Desguace",
+            "Ecoreto",
+            "Finca",
+            "Gijón",
+            "Granada",
+            "León",
+            "Matris",
+            "Nave roja",
+            "Oviedo",
+            "Pas",
+            "Pas chicas",
+            "Pedrosa",
+            "Rastro Adarzo",
+            "Rasines",
+            "Rastro Boo",
+            "Rescate",
+            "Santander",
+            "Sustitución",
+            "Taller mecánica desguace",
+            "Torrelavega"
+          ]
+        }
+      },
+      {
+        "key": "fecha_asignacion",
+        "label": "Asignado al centro desde",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "km",
+        "label": "Kilómetros",
+        "type": "number",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "conductor",
+        "label": "Conductor habitual",
+        "type": "user",
+        "width": "md",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "procedencia",
+        "label": "Procedencia / proveedor",
+        "type": "text",
+        "width": "md",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "fecha_compra",
+        "label": "Fecha de compra",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "valor_compra",
+        "label": "Valor de compra (€)",
+        "type": "decimal",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "fecha_alta",
+        "label": "Fecha de alta",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "seguro_compania",
+        "label": "Aseguradora",
+        "type": "select",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "choices": [
+            "Allianz",
+            "AXA",
+            "AZ",
+            "BAS",
+            "Caser",
+            "Catalana Occidente",
+            "Caja de Seguros Reunidos",
+            "Estrella",
+            "Fidelidade",
+            "FIATC",
+            "Generali",
+            "Helvetia",
+            "Liberty",
+            "Lagun Aro",
+            "Línea Directa",
+            "Lepanto",
+            "Mapfre",
+            "MAAF",
+            "Mutua Valenciana",
+            "Pelayo",
+            "Plus Ultra",
+            "Reale",
+            "Sensación Segur",
+            "UMAS",
+            "Winterthur",
+            "Zurich"
+          ]
+        }
+      },
+      {
+        "key": "seguro_poliza",
+        "label": "Nº póliza",
+        "type": "text",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "seguro_importe",
+        "label": "Importe (€)",
+        "type": "decimal",
+        "width": "xs",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "seguro_alta",
+        "label": "Alta del seguro",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "seguro_vencimiento",
+        "label": "Vencimiento seguro",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "due_alert": true
+        }
+      },
+      {
+        "key": "seguro_baja",
+        "label": "Baja del seguro",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "seguro_motivo_baja",
+        "label": "Motivo baja seguro",
+        "type": "text",
+        "width": "md",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "tarjeta_transporte",
+        "label": "Nº tarjeta de transporte",
+        "type": "text",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "tarjeta_ambito",
+        "label": "Ámbito",
+        "type": "select",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "choices": [
+            "Servicio público pesado",
+            "Servicio particular",
+            "Viajeros particular",
+            "XPC",
+            "DL"
+          ]
+        }
+      },
+      {
+        "key": "tarjeta_alta",
+        "label": "Alta tarjeta",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "tarjeta_vencimiento",
+        "label": "Vencimiento tarjeta",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "due_alert": true
+        }
+      },
+      {
+        "key": "tarjeta_baja",
+        "label": "Baja tarjeta",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "tarjeta_motivo_baja",
+        "label": "Motivo baja tarjeta",
+        "type": "text",
+        "width": "md",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "itv_proxima",
+        "label": "Próxima ITV",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 1,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "due_alert": true
+        }
+      },
+      {
+        "key": "tarjeta_combustible",
+        "label": "Tarjeta combustible",
+        "type": "text",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "pin_tarjeta",
+        "label": "PIN tarjeta",
+        "type": "password",
+        "width": "xs",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "fecha_baja",
+        "label": "Fecha de baja",
+        "type": "date",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {}
+      },
+      {
+        "key": "motivo_baja",
+        "label": "Motivo de baja",
+        "type": "select",
+        "width": "sm",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 1,
+        "options": {
+          "choices": [
+            "Vendido",
+            "Definitiva",
+            "Temporal",
+            "Tránsito comunitario",
+            "Exportación",
+            "En venta",
+            "DE",
+            "VE"
+          ]
+        }
+      },
+      {
+        "key": "observaciones",
+        "label": "Observaciones",
+        "type": "textarea",
+        "width": "full",
+        "show_in_list": 0,
+        "required": 0,
+        "unique_value": 0,
+        "height": 2,
+        "options": {}
+      }
+    ],
+    "reports": [
+      {
+        "name": "Flota por centro de coste",
+        "config": {
+          "columns": [
+            "matricula",
+            "marca",
+            "modelo",
+            "tipo",
+            "titular",
+            "itv_proxima",
+            "seguro_compania",
+            "seguro_vencimiento",
+            "tarjeta_vencimiento"
+          ],
+          "group_by": "_center",
+          "page_per_group": false,
+          "date_field": "",
+          "period": "",
+          "sort": "matricula",
+          "dir": "asc",
+          "layout": "table",
+          "landscape": true,
+          "only_open": true,
+          "blank_cols": [],
+          "signature": "",
+          "notes": ""
+        }
+      },
+      {
+        "name": "Vencimientos de ITV del mes",
+        "config": {
+          "columns": [
+            "matricula",
+            "marca",
+            "modelo",
+            "_center",
+            "itv_proxima",
+            "conductor"
+          ],
+          "group_by": "_center",
+          "page_per_group": false,
+          "date_field": "itv_proxima",
+          "period": "month",
+          "sort": "itv_proxima",
+          "dir": "asc",
+          "layout": "table",
+          "landscape": false,
+          "only_open": true,
+          "blank_cols": [
+            "Cita ITV"
+          ],
+          "signature": "",
+          "notes": ""
+        }
+      }
+    ],
+    "children": [
+      {
+        "key": "vehiculos_revisiones",
+        "name": "Revisiones",
+        "icon": "🔧",
+        "color": "#0ea5e9",
+        "description": "Revisiones y trabajos de taller de cada vehículo",
+        "title_field": "descripcion",
+        "fields": [
+          {
+            "key": "fecha",
+            "label": "Fecha",
+            "type": "date",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 1,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "km",
+            "label": "Kilómetros",
+            "type": "number",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "descripcion",
+            "label": "Trabajo realizado",
+            "type": "text",
+            "width": "lg",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "realizado_por",
+            "label": "Realizado por",
+            "type": "text",
+            "width": "md",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "piezas_revisadas",
+            "label": "Revisado / cambiado",
+            "type": "multiselect",
+            "width": "lg",
+            "show_in_list": 0,
+            "required": 0,
+            "unique_value": 0,
+            "height": 2,
+            "options": {
+              "choices": [
+                "Bomba de agua",
+                "Correa auxiliar",
+                "Valvulina caja de cambio",
+                "Correa de distribución",
+                "Filtro de aceite",
+                "Filtro de aire",
+                "Filtro caja automática",
+                "Filtro de gasoil",
+                "Filtro de habitáculo",
+                "Pastillas de freno",
+                "Engrase",
+                "Niveles",
+                "Válvulas"
+              ]
+            }
+          },
+          {
+            "key": "km_proxima",
+            "label": "Km próxima revisión",
+            "type": "number",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "piezas_proxima",
+            "label": "A revisar en la próxima",
+            "type": "multiselect",
+            "width": "lg",
+            "show_in_list": 0,
+            "required": 0,
+            "unique_value": 0,
+            "height": 2,
+            "options": {
+              "choices": [
+                "Bomba de agua",
+                "Correa auxiliar",
+                "Valvulina caja de cambio",
+                "Correa de distribución",
+                "Filtro de aceite",
+                "Filtro de aire",
+                "Filtro caja automática",
+                "Filtro de gasoil",
+                "Filtro de habitáculo",
+                "Pastillas de freno",
+                "Engrase",
+                "Niveles",
+                "Válvulas"
+              ]
+            }
+          },
+          {
+            "key": "observaciones",
+            "label": "Observaciones",
+            "type": "textarea",
+            "width": "full",
+            "show_in_list": 0,
+            "required": 0,
+            "unique_value": 0,
+            "height": 2,
+            "options": {}
+          }
+        ],
+        "form_layout": {
+          "tabs": false,
+          "items": [
+            {
+              "section": "Revisión"
+            },
+            "fecha",
+            "km",
+            "descripcion",
+            "realizado_por",
+            {
+              "section": "Piezas"
+            },
+            "piezas_revisadas",
+            "km_proxima",
+            "piezas_proxima",
+            {
+              "section": "Notas"
+            },
+            "observaciones"
+          ]
+        }
+      },
+      {
+        "key": "vehiculos_siniestros",
+        "name": "Siniestros",
+        "icon": "💥",
+        "color": "#f59e0b",
+        "description": "Partes de accidente y siniestros de cada vehículo",
+        "title_field": "descripcion",
+        "status_field": "situacion",
+        "closed_values": [
+          "Cerrado"
+        ],
+        "fields": [
+          {
+            "key": "fecha",
+            "label": "Fecha",
+            "type": "date",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 1,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "aseguradora",
+            "label": "Aseguradora",
+            "type": "select",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {
+              "choices": [
+                "Allianz",
+                "AXA",
+                "AZ",
+                "BAS",
+                "Caser",
+                "Catalana Occidente",
+                "Caja de Seguros Reunidos",
+                "Estrella",
+                "Fidelidade",
+                "FIATC",
+                "Generali",
+                "Helvetia",
+                "Liberty",
+                "Lagun Aro",
+                "Línea Directa",
+                "Lepanto",
+                "Mapfre",
+                "MAAF",
+                "Mutua Valenciana",
+                "Pelayo",
+                "Plus Ultra",
+                "Reale",
+                "Sensación Segur",
+                "UMAS",
+                "Winterthur",
+                "Zurich"
+              ]
+            }
+          },
+          {
+            "key": "referencia",
+            "label": "Referencia del siniestro",
+            "type": "text",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {}
+          },
+          {
+            "key": "situacion",
+            "label": "Situación",
+            "type": "select",
+            "width": "sm",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 1,
+            "options": {
+              "choices": [
+                "Abierto",
+                "Cerrado"
+              ]
+            }
+          },
+          {
+            "key": "descripcion",
+            "label": "Descripción",
+            "type": "textarea",
+            "width": "full",
+            "show_in_list": 1,
+            "required": 0,
+            "unique_value": 0,
+            "height": 2,
+            "options": {}
+          }
+        ],
+        "form_layout": {
+          "tabs": false,
+          "items": [
+            {
+              "section": "Siniestro"
+            },
+            "fecha",
+            "aseguradora",
+            "referencia",
+            "situacion",
+            "descripcion"
+          ]
+        }
+      }
+    ]
+  },
+  "exported_at": "plantilla"
+}

@@ -147,7 +147,10 @@ async function seed() {
       }
     }
 
-    const apps = await all('SELECT id FROM apps');
+    // Vehículos completa (subapartados, traspasos, informes) desde su plantilla
+    await require('./structure').importStructure(require('./templates/vehiculos').VEHICULOS);
+
+    const apps = await all('SELECT id FROM apps WHERE parent_app_id IS NULL');
     const cols = PERMS.map((p) => 'can_' + p);
     for (const [name, desc, perms] of ROLES) {
       const roleId = Number((await run('INSERT INTO roles (name, description) VALUES (?,?)', name, desc)).lastInsertRowid);
@@ -160,7 +163,7 @@ async function seed() {
     if (process.env.SEED_DEMO !== '0') {
       const cid = Number((await run(`INSERT INTO companies (name, cif) VALUES ('Empresa Demo', 'B00000000')`)).lastInsertRowid);
       await run(`INSERT INTO centers (company_id, code, name, kind) VALUES (?, 'CC01', 'Sede central', 'ambos')`, cid);
-      await run(`INSERT INTO centers (company_id, code, name, kind) VALUES (?, 'CC02', 'Centro Norte', 'trabajo')`, cid);
+      await run(`INSERT INTO centers (company_id, code, name, kind) VALUES (?, 'CC02', 'Centro Norte', 'ambos')`, cid);
     }
   });
 }

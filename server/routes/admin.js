@@ -367,10 +367,16 @@ router.post('/apps', wrap(async (req, res) => {
   if (!KEY_RE.test(key)) throw httpError(400, 'Clave no válida (minúsculas, números y _; empezar por letra)');
   if (!String(b.name || '').trim()) throw httpError(400, 'El nombre es obligatorio');
   if (await get('SELECT id FROM apps WHERE `key` = ?', key)) throw httpError(409, 'Ya existe una aplicación con esa clave');
+  let parentId = null;
+  if (b.parent_app_id) { // subapartado: solo de una app principal
+    const p = await get('SELECT id, parent_app_id FROM apps WHERE id = ?', Number(b.parent_app_id));
+    if (!p || p.parent_app_id) throw httpError(400, 'Un subapartado solo puede ir dentro de una aplicación principal');
+    parentId = p.id;
+  }
   const id = await tx(async () => {
     const sort = ((await get('SELECT MAX(sort) m FROM apps')).m || 0) + 1;
-    const appId = Number((await run('INSERT INTO apps (`key`, name, icon, color, description, sort, title_field) VALUES (?,?,?,?,?,?,?)',
-      key, b.name, b.icon || '📁', b.color || '#64748b', b.description || '', sort, 'nombre')).lastInsertRowid);
+    const appId = Number((await run('INSERT INTO apps (`key`, name, icon, color, description, sort, title_field, parent_app_id) VALUES (?,?,?,?,?,?,?,?)',
+      key, b.name, b.icon || '📁', b.color || '#64748b', b.description || '', sort, 'nombre', parentId)).lastInsertRowid);
     await run("INSERT INTO fields (app_id, `key`, label, type, required, sort) VALUES (?, 'nombre', 'Nombre', 'text', 1, 0)", appId);
     return appId;
   });
@@ -380,7 +386,9 @@ router.post('/apps', wrap(async (req, res) => {
 router.put('/apps/:id', wrap(async (req, res) => {
   const before = await get('SELECT * FROM apps WHERE id = ?', Number(req.params.id));
   if (!before) throw httpError(404, 'No encontrada');
-  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar', 'number_start', 'status_field', 'closed_values', 'owner_field', 'voice_fields']);
+  const d = pick(req.body, ['name', 'icon', 'color', 'description', 'active', 'title_field', 'sort', 'calendar', 'number_start', 'status_field', 'closed_values', 'owner_field', 'voice_fields', 'transfers', 'center_kind']);
+  if ('transfers' in d) d.transfers = bool(d.transfers);
+  if ('center_kind' in d && !['', 'coste', 'trabajo'].includes(d.center_kind)) throw httpError(400, 'Tipo de centro no válido');
   const appF = Object.fromEntries((await appFields(before.id)).map((f) => [f.key, f]));
   if ('status_field' in d) { d.status_field = d.status_field || null; if (d.status_field && !(appF[d.status_field] && appF[d.status_field].type === 'select')) throw httpError(400, 'El campo de estado debe ser una lista desplegable de la aplicación'); }
   if ('owner_field' in d) { d.owner_field = d.owner_field || null; if (d.owner_field && !(appF[d.owner_field] && appF[d.owner_field].type === 'user')) throw httpError(400, 'El campo responsable debe ser de tipo usuario'); }
@@ -404,6 +412,24 @@ router.put('/apps/:id', wrap(async (req, res) => {
   if (changes.length) await audit(req, { entity: 'apps', entityId: before.id, action: 'update', summary: `Aplicación ${before.name}`, changes });
   res.json({ ok: true });
 }));
+// ---------- estructura de una app (exportar / importar a otra instalación) ----------
+const structure = require('../structure');
+router.get('/apps/:id/structure', wrap(async (req, res) => {
+  const out = await structure.exportStructure(Number(req.params.id));
+  await audit(req, { entity: 'apps', entityId: Number(req.params.id), action: 'export', summary: `Estructura exportada: ${out.app.name}` });
+  res.setHeader('Content-Disposition', `attachment; filename="estructura-${out.app.key}.json"`);
+  res.json(out);
+}));
+router.post('/structure', wrap(async (req, res) => {
+  const { structure: tpl, force_layout = false, dry_run = false } = req.body || {};
+  structure.validate(tpl);
+  const exists = await get('SELECT id, name FROM apps WHERE `key` = ?', tpl.app.key);
+  if (dry_run) return res.json({ ok: true, exists: !!exists, name: tpl.app.name, fields: (tpl.app.fields || []).length, children: (tpl.app.children || []).map((c) => c.name), reports: (tpl.app.reports || []).length });
+  const summary = await tx(() => structure.importStructure(tpl, { force_layout, forceLayout: !!force_layout }));
+  await audit(req, { entity: 'apps', action: 'import', summary: `Estructura importada: ${tpl.app.name} (${summary.apps_created.length} apps creadas, ${summary.fields_added} campos añadidos)` });
+  res.json({ ok: true, ...summary });
+}));
+
 // ---------- informes de cada app ----------
 const { cleanReport } = require('../reports');
 router.get('/apps/:id/reports', wrap(async (req, res) => {

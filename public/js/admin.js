@@ -212,7 +212,8 @@ export async function renderUsers(root) {
 
 // ---------- roles y políticas ----------
 export async function renderRoles(root) {
-  const [data, apps] = await Promise.all([api('/admin/roles'), api('/admin/apps')]);
+  const [data, allApps] = await Promise.all([api('/admin/roles'), api('/admin/apps')]);
+  const apps = allApps.filter((a) => !a.parent_app_id); // los subapartados usan los permisos de su app
   const cols = [...data.perms.map((p) => 'can_' + p), 'only_own'];
   const box = h('div.grid-cards', { style: { gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' } });
   clear(root, head('Roles y políticas', 'Define, por aplicación, qué puede hacer cada rol: ver, crear, editar, borrar, papelera, contraseñas, importar/exportar…',
@@ -272,7 +273,8 @@ export async function renderAppsAdmin(root, onChange) {
   const sideEnt = h('div.sort-list');
   const detail = h('div');
   clear(root, head('Aplicaciones y campos', 'Añade aplicaciones y campos sin programar. Arrastra para cambiar el orden por defecto.',
-    h('button.btn.primary', { onclick: newApp }, '＋ Nueva aplicación')),
+    h('button.btn', { title: 'Importar la estructura de una app desde un fichero .json exportado de otra instalación', onclick: importStructureDlg }, '⬆ Importar estructura'),
+    h('button.btn.primary', { onclick: () => newApp() }, '＋ Nueva aplicación')),
   h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: '16px' }, class: 'apps-admin' }, h('div', side, sideEnt), detail));
   if (window.matchMedia('(max-width: 760px)').matches) root.querySelector('.apps-admin').style.gridTemplateColumns = '1fr';
 
@@ -307,8 +309,10 @@ export async function renderAppsAdmin(root, onChange) {
     drawApp();
   }
   function drawSide() {
-    clear(side, apps.map((a) => h('div.sort-item', { class: (a.active ? '' : 'inactive ') + (a.id === current ? 'active' : ''), dataset: { id: a.id }, style: a.id === current ? { borderColor: 'var(--primary)', background: 'var(--primary-2)' } : { cursor: 'pointer' }, onclick: () => { current = a.id; draw(); } },
-      h('span.grip', '⋮⋮'), h('span', a.icon), h('span.grow', a.name), h('span.muted.small', `${a.fields.filter((f) => f.active).length}`))));
+    // cada app seguida de sus subapartados (sangrados)
+    const ordered = apps.filter((a) => !a.parent_app_id).flatMap((a) => [a, ...apps.filter((c) => c.parent_app_id === a.id)]);
+    clear(side, ordered.map((a) => h('div.sort-item', { class: (a.active ? '' : 'inactive ') + (a.id === current ? 'active' : '') + (a.parent_app_id ? ' sub-app' : ''), dataset: { id: a.id }, style: a.id === current ? { borderColor: 'var(--primary)', background: 'var(--primary-2)' } : { cursor: 'pointer' }, onclick: () => { current = a.id; draw(); } },
+      a.parent_app_id ? h('span.muted', { 'aria-hidden': 'true' }, '↳') : h('span.grip', '⋮⋮'), h('span', a.icon), h('span.grow', a.name), h('span.muted.small', `${a.fields.filter((f) => f.active).length}`))));
     sortable(side, { handle: '.grip', onEnd: () => api('/admin/apps-order', { method: 'PUT', body: { ids: [...side.children].map((e) => e.dataset.id) } }).then(reload) });
     clear(sideEnt, h('div.muted.small', { style: { margin: '14px 4px 6px', textTransform: 'uppercase', letterSpacing: '.05em' } }, 'Datos maestros'), Object.keys(ENT).map(entItem));
   }
@@ -327,6 +331,8 @@ export async function renderAppsAdmin(root, onChange) {
         h('div', { style: { flex: 1 } }, h('h2', a.name), h('div.muted.small', `clave: ${a.key} · ${a.description || ''}`)),
         h('a.btn', { href: `#/admin/design/${a.id}` }, '🎨 Diseñar formulario'),
         h('button.btn', { onclick: () => editApp(a) }, '⚙ Propiedades'),
+        !a.parent_app_id ? h('button.btn', { title: 'Descarga la app con sus subapartados, campos, diseño, listas e informes para llevarla a otra instalación', onclick: () => download(`/admin/apps/${a.id}/structure`, `estructura-${a.key}.json`) }, '⬇ Exportar estructura') : null,
+        !a.parent_app_id ? h('button.btn', { title: 'Crea un subapartado dentro de esta app (p. ej. Revisiones dentro de Vehículos)', onclick: () => newApp(a) }, '＋ Subapartado') : null,
         a.voice_fields && a.voice_fields !== '[]' ? h('a.btn', { href: '#/voz/' + a.key, title: 'Probar el asistente por voz para usuarios invidentes' }, '📞 Probar asistente') : null),
       h('div.row', h('h3', { style: { flex: 1 } }, 'Campos'), h('button.btn.primary.sm', { onclick: () => editField(target, null) }, '＋ Añadir campo')),
       fieldsList,
@@ -362,10 +368,39 @@ export async function renderAppsAdmin(root, onChange) {
     }
     loadReports();
   }
-  async function newApp() {
-    const v = await promptDlg('Nueva aplicación', [{ key: 'name', label: 'Nombre *' }, { key: 'key', label: 'Clave (URL)', placeholder: 'ej. inventario', help: 'Minúsculas sin espacios. Si se deja vacía se genera a partir del nombre.' }, { key: 'icon', label: 'Icono (emoji)', value: '📁' }, { key: 'color', label: 'Color', type: 'color', value: '#64748b' }, { key: 'description', label: 'Descripción' }]);
+  /** Importa la estructura de una app desde un fichero exportado (no borra nada: crea o completa). */
+  async function importStructureDlg() {
+    const file = h('input', { type: 'file', accept: '.json,application/json', id: 'st-file' });
+    const force = h('input', { type: 'checkbox' });
+    const info = h('div.small', { role: 'status' });
+    let tpl = null;
+    file.addEventListener('change', async () => {
+      tpl = null; clear(info);
+      try {
+        tpl = JSON.parse(await file.files[0].text());
+        const r = await api('/admin/structure', { method: 'POST', body: { structure: tpl, dry_run: true } });
+        clear(info, h('p', `${r.exists ? '⚠ Ya existe la app «' + r.name + '»: se completará (se añaden campos, opciones, subapartados e informes; no se borra nada).' : '✔ Se creará la app «' + r.name + '».'}`),
+          h('p.muted', `${r.fields} campos · subapartados: ${r.children.join(', ') || 'ninguno'} · ${r.reports} informes`));
+      } catch (e) { tpl = null; clear(info, h('p.error', e.message)); }
+    });
+    const m = modal({ title: '⬆ Importar estructura de aplicación', size: 'sm',
+      content: h('div.stack', h('p.muted.small', 'Fichero .json obtenido con «⬇ Exportar estructura» en otra instalación. Lleva la app, sus subapartados, campos, diseño, listas e informes (no los datos).'),
+        h('div.field', h('label', { for: 'st-file' }, 'Fichero'), file), h('label.check', force, 'Aplicar también el diseño del formulario aunque ya tenga uno'), info,
+        h('p.muted.small', 'Después, en Roles y políticas, da permisos a la app si es nueva.')),
+      footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
+        if (!tpl) return toast('Elige un fichero válido', 'error');
+        try {
+          const r = await api('/admin/structure', { method: 'POST', body: { structure: tpl, force_layout: force.checked } });
+          toast(`Estructura importada: ${r.apps_created.length} app(s) creadas, ${r.fields_added} campos añadidos, ${r.reports_added} informes`, 'ok');
+          m.close(); reload();
+        } catch (e) { toastErr(e); }
+      } }, 'Importar')] });
+  }
+  async function newApp(parent = null) {
+    const v = await promptDlg(parent ? `Nuevo subapartado de ${parent.name}` : 'Nueva aplicación', [{ key: 'name', label: 'Nombre *' }, { key: 'key', label: 'Clave (URL)', placeholder: 'ej. inventario', help: 'Minúsculas sin espacios. Si se deja vacía se genera a partir del nombre.' }, { key: 'icon', label: 'Icono (emoji)', value: '📁' }, { key: 'color', label: 'Color', type: 'color', value: '#64748b' }, { key: 'description', label: 'Descripción' }]);
     if (!v) return;
-    if (!v.key) v.key = v.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!v.key) v.key = (parent ? parent.key + '_' : '') + v.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (parent) v.parent_app_id = parent.id;
     try { const r = await api('/admin/apps', { method: 'POST', body: v }); current = r.id; toast('Aplicación creada. Recuerda darle permisos en Roles.', 'ok'); reload(); } catch (e) { toastErr(e); }
   }
   const VOICE_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'decimal', 'date', 'datetime', 'select', 'multiselect', 'user', 'checkbox', 'ip', 'iban', 'group'];
@@ -387,6 +422,9 @@ export async function renderAppsAdmin(root, onChange) {
         value: voiceList(a).filter((k) => k !== '*'),
         options: a.fields.filter((f) => VOICE_TYPES.includes(f.type)).map((f) => ({ value: f.key, label: f.label })),
         help: 'Ctrl+clic para marcar varios. Los campos obligatorios se preguntan siempre.' },
+      ...(a.parent_app_id ? [] : [
+        { key: 'center_kind', label: 'Centros que usa', type: 'select', value: a.center_kind || '', options: [{ value: '', label: 'Cualquier centro' }, { value: 'coste', label: 'Solo centros de coste (y «trabajo y coste»)' }, { value: 'trabajo', label: 'Solo centros de trabajo (y «trabajo y coste»)' }] },
+        { key: 'transfers', label: 'Traspasos entre centros (los acepta el centro de destino)', type: 'checkbox', value: !!a.transfers }]),
       { key: 'calendar', label: 'Vista calendario (necesita algún campo de fecha)', type: 'checkbox', value: !!a.calendar },
       { key: 'active', label: 'Aplicación activa', type: 'checkbox', value: !!a.active }]);
     if (!v) return;

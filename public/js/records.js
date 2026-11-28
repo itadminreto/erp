@@ -16,19 +16,25 @@ const META_COLS = {
   _updated_by: { key: '_updated_by', label: 'Modificado por' },
 };
 
-export async function renderApp(root, key, onCountsChanged) {
+/**
+ * Pinta una aplicación en `root`. `opts.parent` (registro padre) la muestra «embebida» dentro de la ficha del padre:
+ * solo sus registros, sin cabecera ni filtros de centro, y las altas se cuelgan de ese padre.
+ */
+export async function renderApp(root, key, onCountsChanged, opts = {}) {
+  const embedded = !!opts.parent;
   const [meta, reports] = await Promise.all([api('/apps/' + key), api(`/apps/${key}/reports`).catch(() => [])]);
   const fieldsByKey = Object.fromEntries(meta.fields.map((f) => [f.key, f]));
   const usersById = { ...Object.fromEntries(Object.entries(meta.user_names || {}).map(([id, name]) => [id, { id: Number(id), name }])), ...Object.fromEntries(meta.users.map((u) => [u.id, u])) };
   const P = meta.perms;
   const st = { q: '', center: '', trash: false, sort: '', dir: 'desc', page: 1, size: 50, selected: new Set(), rows: [], total: 0, filters: {}, state: '', mine: false, overdue: false, view: 'list', calMonth: '', calField: '', colorField: '' };
   const persistKey = `view:${key}`;
-  try { Object.assign(st, JSON.parse(sessionStorage.getItem(persistKey) || '{}'), { selected: new Set(), page: 1 }); } catch { /* sin estado previo */ }
+  if (!embedded) try { Object.assign(st, JSON.parse(sessionStorage.getItem(persistKey) || '{}'), { selected: new Set(), page: 1 }); } catch { /* sin estado previo */ }
+  else Object.assign(st, { size: 25, sort: '', dir: 'desc' });
   if (!P.view_trash) st.trash = false;
-  const saveSt = () => { try { sessionStorage.setItem(persistKey, JSON.stringify({ q: st.q, center: st.center, trash: st.trash, sort: st.sort, dir: st.dir, size: st.size, filters: st.filters, state: st.state, mine: st.mine, overdue: st.overdue, view: st.view, calMonth: st.calMonth, calField: st.calField, colorField: st.colorField })); } catch { /* ignorar */ } };
+  const saveSt = () => { if (embedded) return; try { sessionStorage.setItem(persistKey, JSON.stringify({ q: st.q, center: st.center, trash: st.trash, sort: st.sort, dir: st.dir, size: st.size, filters: st.filters, state: st.state, mine: st.mine, overdue: st.overdue, view: st.view, calMonth: st.calMonth, calField: st.calField, colorField: st.colorField })); } catch { /* ignorar */ } };
 
   // ----- calendario: campos de fecha y de color disponibles -----
-  const dateFields = meta.app.calendar ? meta.fields.filter((f) => ['date', 'datetime'].includes(f.type)) : [];
+  const dateFields = meta.app.calendar && !embedded ? meta.fields.filter((f) => ['date', 'datetime'].includes(f.type)) : [];
   const colorFields = meta.fields.filter((f) => f.type === 'select' && (f.options.choices || []).length);
   if (!dateFields.some((f) => f.key === st.calField)) st.calField = (dateFields.find((f) => /limite|vencim|proxim|fecha/.test(f.key)) || dateFields[0] || {}).key || '';
   if (st.colorField !== '-' && !colorFields.some((f) => f.key === st.colorField)) st.colorField = (colorFields.find((f) => f.key === 'prioridad') || colorFields.find((f) => f.key === 'estado') || colorFields[0] || {}).key || '-';
@@ -68,12 +74,18 @@ export async function renderApp(root, key, onCountsChanged) {
   }
 
   // ----- columnas (diseño por usuario) -----
-  const defaultCols = () => ['_num', '_center', ...meta.fields.filter((f) => f.show_in_list).map((f) => f.key), '_updated_at'];
-  const allColKeys = () => ['_num', '_center', ...meta.fields.map((f) => f.key), '_created_at', '_updated_at', '_updated_by'];
-  let columns = (meta.layouts.list && meta.layouts.list.columns) || defaultCols();
-  columns = columns.map((c) => (c === '_id' ? '_num' : c)).filter((c) => META_COLS[c] || fieldsByKey[c]);
-  const colDef = (c) => META_COLS[c] || { key: c, label: fieldsByKey[c].label, sortKey: fieldsByKey[c].type === 'password' ? null : c, field: fieldsByKey[c] };
-  const saveColumns = () => api(`/apps/${key}/layout/list`, { method: 'PUT', body: { columns } }).catch(toastErr);
+  const isChild = !!meta.parent_app;
+  const allCenters = meta.app.transfers ? await api(`/apps/${key}/transfer-centers`).catch(() => meta.centers) : meta.centers;
+  const centerLabel = (id) => { const c = allCenters.find((x) => x.id === Number(id)) || meta.centers.find((x) => x.id === Number(id)); return c ? `${c.code ? c.code + ' · ' : ''}${c.name}` : `centro ${id}`; };
+  /** Abre un registro de la app padre (desde la columna «Vehículo» de un subapartado). */
+  const openParent = (id) => { try { sessionStorage.setItem('openRec', JSON.stringify({ app: meta.parent_app.key, id })); } catch { /* nada */ } location.hash = '#/app/' + meta.parent_app.key; };
+  const defaultCols = () => [...(embedded ? ['_num'] : isChild ? ['_num', '_parent', '_center'] : ['_num', '_center']), ...meta.fields.filter((f) => f.show_in_list).map((f) => f.key), ...(embedded ? [] : ['_updated_at'])];
+  const allColKeys = () => ['_num', ...(isChild ? ['_parent'] : []), '_center', ...meta.fields.map((f) => f.key), '_created_at', '_updated_at', '_updated_by'];
+  let columns = (!embedded && meta.layouts.list && meta.layouts.list.columns) || defaultCols();
+  columns = columns.map((c) => (c === '_id' ? '_num' : c)).filter((c) => META_COLS[c] || fieldsByKey[c] || (c === '_parent' && isChild));
+  const colDef = (c) => (c === '_parent' ? { key: '_parent', label: meta.parent_app.name, sortKey: null }
+    : META_COLS[c] || { key: c, label: fieldsByKey[c].label, sortKey: fieldsByKey[c].type === 'password' ? null : c, field: fieldsByKey[c] });
+  const saveColumns = () => embedded ? null : api(`/apps/${key}/layout/list`, { method: 'PUT', body: { columns } }).catch(toastErr);
 
   // ----- estructura -----
   const titleEl = h('div.title',
@@ -241,10 +253,19 @@ export async function renderApp(root, key, onCountsChanged) {
   const calCard = h('div.card.cal-card', { hidden: st.view !== 'calendar' });
   colsBtn.hidden = st.view !== 'list'; trashLbl.hidden = st.view !== 'list';
 
-  clear(root,
-    h('div.page-head', titleEl, h('div.btn-group', h('div.btn-group.desktop-only', importBtn, exportMenu, printBtn), h('div.mobile-only', moreMenu), newBtn)),
-    h('div.toolbar', h('div.search', searchInp), meta.centers.length ? centerSel : null, stateSeg, mineBtn, filterBtn, P.view_trash ? trashLbl : null, h('div.spacer'), viewBtns, colsBtn),
-    activeBar, bulkBar, listCard, calCard);
+  // subapartados: Vehículos | Revisiones | Siniestros
+  const family = isChild ? [meta.parent_app, ...(meta.siblings || [])] : meta.children && meta.children.length ? [meta.app, ...meta.children] : [];
+  const subtabs = family.length ? h('nav.app-subtabs', { 'aria-label': 'Apartados' }, family.map((a) => h('a', { href: '#/app/' + a.key, class: a.key === key ? 'on' : '', 'aria-current': a.key === key ? 'page' : null },
+    h('span', { 'aria-hidden': 'true' }, a.icon || '📁'), ' ', a.name))) : null;
+  if (embedded) {
+    clear(root, h('div.embed-bar', h('div.search', searchInp), stateSeg, h('div.spacer'), newBtn), activeBar, listCard);
+  } else {
+    clear(root,
+      h('div.page-head', titleEl, h('div.btn-group', h('div.btn-group.desktop-only', importBtn, exportMenu, printBtn), h('div.mobile-only', moreMenu), newBtn)),
+      subtabs,
+      h('div.toolbar', h('div.search', searchInp), meta.centers.length ? centerSel : null, stateSeg, mineBtn, filterBtn, P.view_trash ? trashLbl : null, h('div.spacer'), viewBtns, colsBtn),
+      activeBar, bulkBar, listCard, calCard);
+  }
   drawActiveFilters();
 
   // ----- carga -----
@@ -252,6 +273,7 @@ export async function renderApp(root, key, onCountsChanged) {
     saveSt();
     if (st.view === 'calendar') return loadCalendar();
     const qs = new URLSearchParams({ page: st.page, size: st.size });
+    if (embedded) qs.set('parent', opts.parent.id);
     if (st.q) qs.set('q', st.q);
     if (st.center) qs.set('center', st.center);
     if (st.trash) qs.set('trash', '1');
@@ -270,6 +292,8 @@ export async function renderApp(root, key, onCountsChanged) {
 
   const pagesCount = () => Math.max(1, Math.ceil(st.total / st.size));
   function cellText(r, c) {
+    if (c === '_center') return r.center_code || r.center_name || '';
+    if (c === '_parent') return r.parent_title || (r.parent_number ? `Nº ${r.parent_number}` : '');
     const f = fieldsByKey[c];
     if (f && f.type === 'date') return fmtDate(r.data[c]);
     if (f && f.type === 'password') return r.data[c] ? '••••••' : '';
@@ -285,6 +309,7 @@ export async function renderApp(root, key, onCountsChanged) {
   // ----- impresión -----
   function filterQS() {
     const qs = new URLSearchParams();
+    if (embedded) qs.set('parent', opts.parent.id);
     if (st.q) qs.set('q', st.q);
     if (st.center) qs.set('center', st.center);
     appendFilters(qs);
@@ -605,7 +630,8 @@ export async function renderApp(root, key, onCountsChanged) {
 
   function cellValue(r, c, { reveal = true } = {}) {
     switch (c) {
-      case '_center': return r.center_code || r.center_name || '—';
+      case '_center': return [r.center_code || r.center_name || '—', r.transfer_to ? h('span.chip.warn.tr-chip', { title: 'Traspaso pendiente de aceptar' }, `⇄ ${centerLabel(r.transfer_to)}`) : null];
+      case '_parent': return r.parent_id ? h('a', { href: `#/app/${meta.parent_app.key}`, onclick: (e) => { e.preventDefault(); e.stopPropagation(); openParent(r.parent_id); } }, r.parent_title || `Nº ${r.parent_number}`) : '—';
       case '_num': return h('strong.num', String(r.number ?? ''));
       case '_updated_at': return fmtDateTime(r.updated_at);
       case '_created_at': return fmtDateTime(r.created_at);
@@ -830,8 +856,34 @@ export async function renderApp(root, key, onCountsChanged) {
     const editable = isNew ? P.create : rec.can.edit;
     const inputs = {}; const dirtyPw = new Set();
 
+    // subapartado: registro padre (fijo si ya existe o si se abre desde la ficha del padre; si no, se elige)
+    let parentRef = rec && rec.parent_id ? { id: rec.parent_id, title: rec.parent_title || `Nº ${rec.parent_number}` }
+      : embedded ? { id: opts.parent.id, title: opts.parent.title } : null;
+    let parentBox = null;
+    if (isChild) {
+      if (parentRef) parentBox = h('div.field', h('label', meta.parent_app.name), h('div.parent-ref', h('strong', parentRef.title)));
+      else {
+        const dl = h('datalist', { id: 'dl-parent' });
+        const found = new Map();
+        const pin = h('input', { id: 'parent-pick', list: 'dl-parent', autocomplete: 'off', placeholder: `Escribe ${fieldsByKey[meta.parent_app.title_field] ? '' : ''}para buscar…`,
+          oninput: debounce(async () => {
+            const q = pin.value.trim();
+            if (found.has(q)) { parentRef = found.get(q); return; }
+            parentRef = null;
+            if (q.length < 2) return;
+            try {
+              const r = await api(`/apps/${meta.parent_app.key}/records?q=${encodeURIComponent(q)}&size=15`);
+              clear(dl, r.rows.map((x) => { const t = String(x.data[meta.parent_app.title_field] || `Nº ${x.number}`); found.set(t, { id: x.id, title: t }); return h('option', { value: t }, `Nº ${x.number}`); }));
+              if (found.has(pin.value.trim())) parentRef = found.get(pin.value.trim());
+            } catch { /* sin resultados */ }
+          }, 250) });
+        parentBox = h('div.field', h('label', { for: 'parent-pick' }, `${meta.parent_app.name} *`), pin, dl, h('div.help', 'Escribe la matrícula (o el Nº) y elígelo de la lista.'));
+      }
+    }
+    const transfersOn = !!meta.app.transfers;
     const centerOpts = meta.centers.filter((c) => (isNew ? c.can_create : true) || (rec && rec.center_id === c.id));
-    const centerSelect = h('select', { disabled: !editable },
+    const centerSelect = h('select', { disabled: !editable || (transfersOn && !isNew && !state.me.is_superadmin && !!(rec && rec.center_id)),
+      title: transfersOn && !isNew ? 'Para cambiar de centro usa «⇄ Traspasar»' : '' },
       (isNew ? meta.can_create_without_center : true) ? h('option', { value: '' }, '— Sin centro —') : null,
       centerOpts.map((c) => h('option', { value: c.id, selected: rec ? rec.center_id === c.id : String(st.center) === String(c.id) }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
 
@@ -1104,6 +1156,10 @@ export async function renderApp(root, key, onCountsChanged) {
         else if (f.type === 'multiselect') data[f.key] = [...i.selectedOptions].map((o) => o.value);
         else data[f.key] = i.value;
       }
+      if (isChild) {
+        if (!parentRef) throw new Error(`Elige a qué ${meta.parent_app.name.toLowerCase().replace(/s$/, '')} pertenece`);
+        return { parent_id: parentRef.id, data };
+      }
       return { center_id: centerSelect.value || null, data };
     }
 
@@ -1127,10 +1183,29 @@ export async function renderApp(root, key, onCountsChanged) {
       await api(`/apps/${key}/layout/form`, { method: 'PUT', body: { reset: true } }).catch(toastErr);
     } }, 'Restablecer');
 
+    // traspaso entre centros: lo pide el centro de origen y lo acepta el de destino
+    let transferBox = null;
+    if (rec && transfersOn && !rec.deleted_at && rec.center_id) {
+      if (rec.transfer_to) {
+        transferBox = h('div.transfer-banner', { role: 'status' }, `⇄ Traspaso pendiente a ${centerLabel(rec.transfer_to)}: esperando que lo acepte el centro de destino.`,
+          rec.can.edit ? h('button.btn.sm', { onclick: async () => {
+            try {
+              const list = await api(`/apps/${key}/records/${rec.id}/transfers`);
+              const t = list.find((x) => x.status === 'pending');
+              if (!t || !(await confirmDlg('¿Anular el traspaso pendiente?', { ok: 'Anular traspaso' }))) return;
+              await api(`/apps/${key}/transfers/${t.id}/cancel`, { method: 'POST', body: {} });
+              toast('Traspaso anulado', 'ok'); m.close(); load();
+            } catch (e) { toastErr(e); }
+          } }, 'Anular') : null);
+      } else if (rec.can.edit) {
+        transferBox = h('button.btn.transfer-btn', { type: 'button', onclick: () => transferDlg(rec, () => { m.close(); load(); }) }, '⇄ Traspasar a otro centro');
+      }
+    }
     const dataPane = h('div', { style: { ...(labelSize ? { '--lbl-fs': labelSize + 'px' } : {}), ...(inputSize ? { '--inp-fs': inputSize + 'px' } : {}) } },
       rec && rec.deleted_at ? h('div.deleted-banner', `🗑️ Registro en la papelera desde ${fmtDateTime(rec.deleted_at)}${rec.deleted_by_name ? ' por ' + rec.deleted_by_name : ''}.`) : null,
       h('div.form-top',
-        meta.centers.length ? h('div.field', h('label', 'Centro de trabajo / coste'), centerSelect) : null,
+        isChild ? parentBox : meta.centers.length ? h('div.field', h('label', meta.app.center_kind === 'coste' ? 'Centro de coste' : 'Centro de trabajo / coste'), centerSelect) : null,
+        transferBox,
         h('div.design-tools.desktop-only', designBtn, resetBtn)),
       actionBar,
       formBody,
@@ -1138,16 +1213,26 @@ export async function renderApp(root, key, onCountsChanged) {
         h('span', `Modificado ${fmtDateTime(rec.updated_at)}${rec.updated_by_name ? ' por ' + rec.updated_by_name : ''}`)) : null);
     const historyPane = h('div', { hidden: true });
 
+    // pestañas: Datos · subapartados (Revisiones, Siniestros…) · Traspasos · Historial
     let tabs = null;
-    if (rec && rec.can.view_history) {
-      const tData = h('button.active', { onclick: () => switchTab(0) }, 'Datos');
-      const tHist = h('button', { onclick: () => switchTab(1) }, '🕘 Historial');
-      tabs = h('div.tabs', tData, tHist);
-      var switchTab = async (i) => {
-        tData.classList.toggle('active', i === 0); tHist.classList.toggle('active', i === 1);
-        dataPane.hidden = i !== 0; historyPane.hidden = i !== 1;
-        if (i === 1) loadHistory(rec, historyPane);
-      };
+    const extraPanes = [];
+    if (rec) {
+      const defs = [{ label: 'Datos', pane: dataPane }];
+      for (const c of meta.children || []) {
+        const pane = h('div', { hidden: true });
+        defs.push({ label: `${c.icon || ''} ${c.name}`, pane, load: () => renderApp(pane, c.key, null, { parent: { id: rec.id, title: String(rec.data[meta.app.title_field] || `Nº ${rec.number}`), center_id: rec.center_id } }) });
+      }
+      if (transfersOn) { const pane = h('div', { hidden: true }); defs.push({ label: '⇄ Traspasos', pane, load: () => loadTransfers(rec, pane) }); }
+      if (rec.can.view_history) defs.push({ label: '🕘 Historial', pane: historyPane, load: () => loadHistory(rec, historyPane) });
+      if (defs.length > 1) {
+        const btns = defs.map((d, i) => h('button', { class: i === 0 ? 'active' : '', onclick: () => switchTab(i) }, d.label));
+        tabs = h('div.tabs', btns);
+        defs.slice(1).forEach((d) => { if (d.pane !== historyPane) extraPanes.push(d.pane); });
+        var switchTab = (i) => {
+          defs.forEach((d, n) => { btns[n].classList.toggle('active', n === i); d.pane.hidden = n !== i; });
+          if (defs[i].load) defs[i].load().catch?.(toastErr);
+        };
+      }
     }
 
     const title = rec ? String(rec.data[meta.app.title_field] || meta.app.name) : `Nuevo · ${meta.app.name}`;
@@ -1156,7 +1241,7 @@ export async function renderApp(root, key, onCountsChanged) {
     const statusChip = rec && sf && rec.data[sf.key] ? h('span.chip.opt.head-chip', { style: { '--c': choiceColor(sf, rec.data[sf.key]) } }, rec.data[sf.key]) : null;
     const dueF = rec ? meta.fields.find((f) => f.type === 'date' && dueState(rec, f)) : null;
     const dueChip = dueF ? h('span.chip.head-chip', { class: dueState(rec, dueF) === 'over' ? 'danger' : 'warn' }, `${dueState(rec, dueF) === 'over' ? '⚠ Vencido' : 'Vence'} ${fmtDate(rec.data[dueF.key])}`) : null;
-    const m = modal({ title: [h('span', { 'aria-hidden': 'true' }, meta.app.icon || ''), rec ? h('span.num-badge', `Nº ${rec.number}`) : null, h('span.head-title', title), statusChip, dueChip], size: 'lg', tabs, content: [dataPane, historyPane] });
+    const m = modal({ title: [h('span', { 'aria-hidden': 'true' }, meta.app.icon || ''), rec ? h('span.num-badge', `Nº ${rec.number}`) : null, h('span.head-title', title), statusChip, dueChip], size: 'lg', tabs, content: [dataPane, ...extraPanes, historyPane] });
     m.el.classList.add('rec-modal');
     const footer = [];
     if (rec && rec.deleted_at) {
@@ -1187,6 +1272,39 @@ export async function renderApp(root, key, onCountsChanged) {
     saveRef = m.foot.querySelector('.btn.primary');
     evalButtons();
     dataPane.addEventListener('input', evalButtons); dataPane.addEventListener('change', evalButtons);
+  }
+
+  // ----- traspasos entre centros -----
+  const TR_STATUS = { pending: ['Pendiente', 'warn'], accepted: ['Aceptado', 'ok'], rejected: ['Rechazado', 'danger'], cancelled: ['Anulado', ''] };
+  async function transferDlg(rec, after) {
+    const dests = allCenters.filter((c) => c.id !== rec.center_id);
+    if (!dests.length) return toast('No hay otro centro al que traspasar', 'error');
+    const sel = h('select', { id: 'tr-to' }, h('option', { value: '' }, '— Elige el centro de destino —'), dests.map((c) => h('option', { value: c.id }, `${c.code ? c.code + ' · ' : ''}${c.name}`)));
+    const note = h('textarea', { id: 'tr-note', rows: 3, placeholder: 'Motivo, quién lo lleva, cuándo llega… (opcional)' });
+    const m = modal({ title: `⇄ Traspasar ${rec.data[meta.app.title_field] || 'Nº ' + rec.number}`, size: 'sm',
+      content: h('div.stack', h('p.muted.small', `Ahora está en ${centerLabel(rec.center_id)}. El traspaso se hace cuando el centro de destino lo acepte desde su menú principal.`),
+        h('div.field', h('label', { for: 'tr-to' }, 'Centro de destino *'), sel), h('div.field', h('label', { for: 'tr-note' }, 'Nota para el centro de destino'), note)),
+      footer: [h('div.spacer'), h('button.btn', { onclick: () => m.close() }, 'Cancelar'), h('button.btn.primary', { onclick: async () => {
+        if (!sel.value) return toast('Elige el centro de destino', 'error');
+        try {
+          await api(`/apps/${key}/records/${rec.id}/transfer`, { method: 'POST', body: { to_center: Number(sel.value), note: note.value } });
+          toast(`Traspaso enviado a ${sel.selectedOptions[0].textContent}: pendiente de aceptar`, 'ok'); m.close(); after && after();
+        } catch (e) { toastErr(e); }
+      } }, 'Enviar traspaso')] });
+  }
+  async function loadTransfers(rec, pane) {
+    clear(pane, h('p.muted', 'Cargando…'));
+    try {
+      const list = await api(`/apps/${key}/records/${rec.id}/transfers`);
+      clear(pane, list.length ? h('div.table-wrap', h('table.data',
+        h('thead', h('tr', ['Fecha', 'De', 'A', 'Estado', 'Solicitado por', 'Resuelto', 'Notas'].map((t) => h('th.nosort', { scope: 'col' }, t)))),
+        h('tbody', list.map((t) => h('tr', { style: { cursor: 'default' } },
+          h('td.small', fmtDateTime(t.requested_at)), h('td', t.from_name || '—'), h('td', t.to_name || '—'),
+          h('td', h('span.chip', { class: (TR_STATUS[t.status] || [])[1] }, (TR_STATUS[t.status] || [t.status])[0])),
+          h('td.small', t.requested_by_name || '—'), h('td.small', t.resolved_at ? `${fmtDateTime(t.resolved_at)}${t.resolved_by_name ? ' · ' + t.resolved_by_name : ''}` : '—'),
+          h('td.small', { style: { whiteSpace: 'normal' } }, [t.note, t.response ? `Respuesta: ${t.response}` : ''].filter(Boolean).join(' · ') || '—'))))))
+        : h('p.muted', 'Sin traspasos.'));
+    } catch (e) { clear(pane, h('p.error', e.message)); }
   }
 
   async function loadHistory(rec, pane) {
@@ -1303,4 +1421,11 @@ export async function renderApp(root, key, onCountsChanged) {
   }
 
   await load();
+  // abrir un registro concreto al llegar (desde la bandeja de traspasos o desde un subapartado)
+  if (!embedded) {
+    try {
+      const o = JSON.parse(sessionStorage.getItem('openRec') || 'null');
+      if (o && o.app === key) { sessionStorage.removeItem('openRec'); openRecord({ id: o.id }); }
+    } catch { /* nada */ }
+  }
 }

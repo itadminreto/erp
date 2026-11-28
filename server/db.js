@@ -96,6 +96,23 @@ const SCHEMA = [
     KEY ix_wgm_user (user_id),
     CONSTRAINT fk_wgm_group FOREIGN KEY (group_id) REFERENCES work_groups(id)
   )`,
+  `CREATE TABLE IF NOT EXISTS record_transfers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    app_id INT NOT NULL,
+    company_id INT NOT NULL,
+    record_id INT NOT NULL,
+    from_center INT NULL,
+    to_center INT NOT NULL,
+    status VARCHAR(12) NOT NULL DEFAULT 'pending',
+    note VARCHAR(1000),
+    response VARCHAR(1000),
+    requested_by INT NULL,
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_by INT NULL,
+    resolved_at DATETIME NULL,
+    KEY ix_rt_record (record_id),
+    KEY ix_rt_pending (company_id, status, to_center)
+  )`,
   `CREATE TABLE IF NOT EXISTS app_reports (
     id INT AUTO_INCREMENT PRIMARY KEY,
     app_id INT NOT NULL,
@@ -317,6 +334,12 @@ async function init() {
     KEY idx_files_record (record_id),
     CONSTRAINT fk_files_record FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // Subapartados (apps hijas: p. ej. Revisiones dentro de Vehículos), traspasos entre centros y tipo de centro por app
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS parent_app_id INT NULL');
+  await pool.query('ALTER TABLE apps ADD COLUMN IF NOT EXISTS transfers TINYINT(1) NOT NULL DEFAULT 0');
+  await pool.query("ALTER TABLE apps ADD COLUMN IF NOT EXISTS center_kind VARCHAR(10) NOT NULL DEFAULT ''");
+  await pool.query('ALTER TABLE records ADD COLUMN IF NOT EXISTS parent_id INT NULL');
+  await pool.query('ALTER TABLE records ADD INDEX IF NOT EXISTS ix_records_parent (parent_id)');
   // Sesiones: id visible (para desconectar sin exponer el token), inicio, última actividad, IP y navegador
   await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS id BIGINT NOT NULL AUTO_INCREMENT UNIQUE FIRST');
   await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at DATETIME NULL');
@@ -405,6 +428,20 @@ async function init() {
       }
     }
     await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_recados_layout_v1', '1')");
+  }
+  // Vehículos: flota por centro de coste con traspasos, subapartados Revisiones y Siniestros y los datos del
+  // antiguo programa (Delphi). Se completa la app existente sin borrar nada. Una sola vez.
+  const vhDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_vehiculos_v2'");
+  if (!vhDone.length) {
+    if ((await pool.query("SELECT 1 FROM apps WHERE `key` = 'vehiculos'")).length) {
+      const { importStructure } = require('./structure');
+      const { VEHICULOS } = require('./templates/vehiculos');
+      await importStructure(VEHICULOS);
+      // solo se exige centro de coste si ya hay alguno marcado como tal (si no, se activa luego en Propiedades)
+      const [k] = await pool.query("SELECT COUNT(*) n FROM centers WHERE kind IN ('coste', 'ambos') AND deleted_at IS NULL");
+      if (!Number(k.n)) await pool.query("UPDATE apps SET center_kind = '' WHERE `key` = 'vehiculos'");
+    }
+    await pool.query("INSERT INTO settings (`key`, value) VALUES ('migr_vehiculos_v2', '1')");
   }
   // Informe «Parte diario por grupo» en Recados (si aún no tiene informes). Una sola vez.
   const repDone = await pool.query("SELECT 1 FROM settings WHERE `key` = 'migr_recados_report_v1'");
@@ -532,7 +569,7 @@ async function nextNumber(appId, companyId) {
 
 /** Tablas que se incluyen en las copias de seguridad (las sesiones no). */
 const BACKUP_TABLES = ['companies', 'centers', 'work_groups', 'work_group_members', 'users', 'apps', 'fields', 'roles', 'role_permissions', 'user_assignments',
-  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files', 'app_reports'];
+  'records', 'audit_log', 'user_layouts', 'settings', 'share_links', 'entity_fields', 'record_files', 'app_reports', 'record_transfers'];
 
 const close = () => pool.end();
 
